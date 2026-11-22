@@ -131,8 +131,6 @@ def is_flat_plane_or_box(obj):
 def is_helper_object(obj, col_names_lower):
     if obj.display_type in ("WIRE", "BOUNDS"):
         return True
-    if obj.hide_render:
-        return True
     lower_n = obj.name.lower()
     if any(kw in col_names_lower for kw in HELPER_COL_KEYWORDS):
         return True
