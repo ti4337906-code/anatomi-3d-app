@@ -20,7 +20,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: public/models
-          key: z-anatomy-glb-v1-${{ hashFiles('scripts/export_z_anatomy.py') }}
+          key: z-anatomy-glb-v2-${{ hashFiles('scripts/export_z_anatomy.py') }}
 
       - name: Install Blender (Headless)
         if: steps.cache-models.outputs.cache-hit != 'true'
@@ -36,7 +36,8 @@ jobs:
           unzip -q assets_source/repo/Z-Anatomy.zip -d assets_source/extracted
           BLEND_FILE=$(find assets_source/extracted -name "*.blend" | head -n 1)
           cp assets_source/repo/TA2.csv assets_source/TA2.csv
-          blender -b "$BLEND_FILE" -P scripts/export_z_anatomy.py -- --ta2 assets_source/TA2.csv --out public/models
+          blender -b "$BLEND_FILE" --python-exit-code 1 -P scripts/export_z_anatomy.py -- --ta2 assets_source/TA2.csv --out public/models
+          test -f public/models/manifest.json
           ls -lh public/models
 
       - name: Upload models artifact for build jobs
