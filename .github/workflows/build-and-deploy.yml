@@ -26,7 +26,7 @@ jobs:
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y blender unzip git
+          sudo apt-get install -y blender python3-numpy unzip git
 
       - name: Download Z-Anatomy official dataset & export GLB layers
         if: steps.cache-models.outputs.cache-hit != 'true'
