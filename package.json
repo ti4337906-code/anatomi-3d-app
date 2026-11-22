@@ -1,0 +1,23 @@
+{
+  "name": "anatomi-3d-atlas",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tam Z-Anatomy (CC BY-SA 4.0) tabanlı, GitHub Pages ve Android APK destekli 3D insan anatomisi atlası",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "cap:sync": "npx cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "lucide": "^0.460.0",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2",
+    "vite": "^5.4.11"
+  }
+}

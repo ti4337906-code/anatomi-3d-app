@@ -1,0 +1,9 @@
+node_modules/
+dist/
+android/
+assets_source/
+public/models/*.glb
+public/models/manifest.json
+public/draco/
+*.apk
+.DS_Store

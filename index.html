@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Anatomi 3D Atlas — Z-Anatomy (TA2)</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <div id="viewport"></div>
+
+  <!-- Loading Overlay -->
+  <div id="loadingOverlay" class="overlay-screen">
+    <div class="glass card-box">
+      <div class="spinner"></div>
+      <h2 class="title-md">Z-Anatomy 3D Yükleniyor</h2>
+      <p id="loadingStatus" class="muted-sm">Anatomik sistem manifestosu okunuyor...</p>
+      <div class="progress-track">
+        <div id="loadingBar" class="progress-fill" style="width: 8%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Attribution / License Modal (CC BY-SA 4.0) -->
+  <div id="licenseModal" class="overlay-screen hidden">
+    <div class="glass card-box modal-lg">
+      <div class="modal-head">
+        <h3>Lisans ve Veri Kaynakları</h3>
+        <button id="btnCloseLicense" class="icon-btn" aria-label="Kapat">✕</button>
+      </div>
+      <div class="modal-body">
+        <p>Bu uygulama yüksek anatomik doğruluk için aşağıdaki açık kaynak tıbbi veri setlerini kullanır:</p>
+        <ul>
+          <li><strong>Z-Anatomy (Models-of-human-anatomy):</strong> CC BY-SA 4.0 lisansı ile dağıtılan tam insan anatomisi 3D atlası ve <em>Terminologia Anatomica 2 (TA2)</em> sınıflandırması.</li>
+          <li><strong>BodyParts3D / Anatomography (DBCLS, Japonya):</strong> CC BY-SA 2.1 JP — MRI/BT tabanlı insan anatomisi temel poligon veri seti.</li>
+        </ul>
+        <p class="muted-sm">Uyarı: Bu uygulama eğitim ve referans amaçlıdır; klinik tanı veya cerrahi planlama için kullanılamaz.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Top Bar -->
+  <header class="top-bar">
+    <div class="bar-group">
+      <button id="btnToggleLeft" class="glass icon-btn" title="Sistemler & Arama">☰</button>
+      <div class="glass brand-pill">
+        <span class="brand-dot"></span>
+        <div>
+          <div class="brand-title">Anatomi 3D</div>
+          <div class="brand-sub">Z-Anatomy • TA2</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="glass bar-group center-tools">
+      <button id="btnXray" class="tool-btn">Röntgen</button>
+      <button id="btnSlice" class="tool-btn">Kesit</button>
+      <button id="btnQuiz" class="tool-btn">Sınav</button>
+      <button id="btnLicense" class="tool-btn">Lisans</button>
+    </div>
+
+    <div class="bar-group">
+      <button id="btnReset" class="glass tool-btn">Sıfırla</button>
+      <button id="btnToggleRight" class="glass icon-btn" title="Yapı Detayı">ℹ</button>
+    </div>
+  </header>
+
+  <!-- Cross-Section Floating Panel -->
+  <div id="slicePanel" class="glass floating-panel hidden">
+    <div class="panel-row">
+      <span class="label-accent">Anatomik Kesit Düzlemi</span>
+      <div class="axis-group">
+        <button data-plane="axial" class="axis-btn active">Aksiyel</button>
+        <button data-plane="sagittal" class="axis-btn">Sagittal</button>
+        <button data-plane="coronal" class="axis-btn">Koronal</button>
+      </div>
+    </div>
+    <div class="panel-row">
+      <input id="sliceRange" type="range" min="-1.2" max="1.2" step="0.02" value="1.2" />
+      <span id="sliceVal" class="mono-val">100%</span>
+    </div>
+  </div>
+
+  <!-- Quiz Floating Panel -->
+  <div id="quizPanel" class="glass floating-panel hidden">
+    <div class="panel-row">
+      <span class="label-amber">Anatomi Sınavı</span>
+      <div class="quiz-stats">
+        <span class="badge-green">Skor: <b id="quizScore">0</b></span>
+        <span class="badge-amber">Seri: <b id="quizStreak">0</b></span>
+        <button id="btnCloseQuiz" class="icon-btn-sm">✕</button>
+      </div>
+    </div>
+    <div id="quizQuestion" class="quiz-q"></div>
+    <div id="quizFeedback" class="quiz-fb"></div>
+    <div class="panel-row">
+      <button id="btnQuizHint" class="tool-btn">Odaklan / İpucu</button>
+      <button id="btnQuizSkip" class="tool-btn">Sonraki</button>
+    </div>
+  </div>
+
+  <!-- Left Drawer -->
+  <aside id="leftPanel" class="glass drawer drawer-left">
+    <div class="drawer-head">
+      <input id="searchInput" type="search" placeholder="TA2 / Latince / Türkçe yapı ara..." />
+      <div class="preset-row">
+        <button data-preset="default" class="preset-btn active">Varsayılan</button>
+        <button data-preset="all" class="preset-btn">Tümü</button>
+        <button data-preset="skeletal" class="preset-btn">İskelet</button>
+        <button data-preset="neurovasc" class="preset-btn">Damar-Sinir</button>
+        <button data-preset="viscera" class="preset-btn">İç Organlar</button>
+      </div>
+    </div>
+
+    <div class="tab-bar">
+      <button id="tabSystems" class="tab-btn active">Sistemler</button>
+      <button id="tabStructures" class="tab-btn">Yapılar (<span id="structCount">0</span>)</button>
+    </div>
+
+    <div id="systemsContainer" class="drawer-scroll"></div>
+    <div id="structuresContainer" class="drawer-scroll hidden"></div>
+
+    <div id="hiddenFooter" class="drawer-footer hidden">
+      <span><b id="hiddenCount">0</b> yapı gizli</span>
+      <button id="btnRestoreHidden" class="link-btn">Tümünü Göster</button>
+    </div>
+  </aside>
+
+  <!-- Right Drawer -->
+  <aside id="rightPanel" class="glass drawer drawer-right">
+    <div id="inspectorEmpty" class="drawer-scroll pad-md">
+      <div class="pill-info">Z-Anatomy • Terminologia Anatomica 2</div>
+      <h2 class="title-md">Tam Sistemik 3D Atlas</h2>
+      <p class="muted-sm">Herhangi bir kemiğe, kasa, damara, sinire veya iç organa dokunarak anatomik detayları inceleyin.</p>
+      <div class="info-block">
+        <strong>Dokunmatik / Fare Kontrolleri</strong>
+        <p class="muted-sm">Tek parmak / Sol tık: Döndür<br/>İki parmak / Sağ tık: Kaydır & Yakınlaştır<br/>Dokun / Tıkla: Yapı seç ve diseksiyon yap</p>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-card"><b id="statSystems">0</b><span>Sistem</span></div>
+        <div class="stat-card"><b id="statMeshes">0</b><span>3D Yapı</span></div>
+      </div>
+    </div>
+
+    <div id="inspectorDetail" class="drawer-scroll pad-md hidden">
+      <div class="detail-top">
+        <span id="detailSystemBadge" class="pill-info"></span>
+        <button id="btnCloseDetail" class="icon-btn-sm">✕</button>
+      </div>
+      <h2 id="detailName" class="title-lg"></h2>
+      <div id="detailLatin" class="latin-sub"></div>
+      <div id="detailTa2" class="ta2-code"></div>
+
+      <div class="action-grid">
+        <button id="btnFocus" class="tool-btn">Odaklan</button>
+        <button id="btnIsolate" class="tool-btn">İzole Et</button>
+        <button id="btnHide" class="tool-btn">Gizle</button>
+      </div>
+
+      <div class="info-block">
+        <strong>Anatomik Bölge / Koleksiyon</strong>
+        <p id="detailRegion" class="body-sm"></p>
+      </div>
+      <div id="detailClinicalWrap" class="info-block hidden">
+        <strong>Klinik & Fizyolojik Not</strong>
+        <p id="detailClinical" class="body-sm"></p>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Bottom Camera Bar -->
+  <footer class="glass bottom-bar">
+    <button data-cam="anterior" class="cam-btn active">Ön</button>
+    <button data-cam="posterior" class="cam-btn">Arka</button>
+    <button data-cam="right" class="cam-btn">Sağ</button>
+    <button data-cam="left" class="cam-btn">Sol</button>
+    <button data-cam="head" class="cam-btn">Baş</button>
+    <button data-cam="thorax" class="cam-btn">Toraks</button>
+    <button data-cam="abdomen" class="cam-btn">Abdomen</button>
+  </footer>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
