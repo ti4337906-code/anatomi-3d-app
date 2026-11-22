@@ -94,7 +94,14 @@ for obj in bpy.context.view_layer.objects:
     # 1. Capture 3D anatomical landmarks (Labels / Text / Empties like Ostium sinus coronarii, Foramina, Sulci)
     is_label_obj = obj.type in ("FONT", "EMPTY") or "label" in lower_n or lower_n.startswith("text")
     if is_label_obj:
-        raw_txt = obj.data.body if (obj.type == "FONT" and getattr(obj.data, "body", "")) else obj.name
+        raw_txt = obj.name
+        if obj.type == "FONT":
+            try:
+                body = obj.data.body
+                if body:
+                    raw_txt = body
+            except Exception:
+                raw_txt = obj.name
         disp, base = clean_name(raw_txt)
         if len(base) >= 3 and not base.lower().startswith(("camera", "light", "lamp", "line", "arrow")):
             loc = obj.matrix_world.translation
