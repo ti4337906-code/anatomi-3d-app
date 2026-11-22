@@ -136,7 +136,7 @@ def is_helper_object(obj, col_names_lower):
         return True
     if any(kw in lower_n for kw in HELPER_NAME_KEYWORDS):
         return True
-        if is_flat_plane_or_box(obj):
+    if is_flat_plane_or_box(obj):
         return True
     if obj.type == "CURVE":
         d = obj.data
