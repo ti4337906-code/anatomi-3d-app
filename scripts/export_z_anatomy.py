@@ -59,12 +59,12 @@ if os.path.exists(ta2_path):
 
 # Strict helper / plane / cutter / MRI slice exclusion rules
 HELPER_COL_KEYWORDS = (
-    "cross-section", "cross section", "section", "mri", "slice", "cutter",
+    "cross-section", "cross section", "mri", "slice", "cutter",
     "boolean", "helper", "reference", "gizmo", "interface", "background",
-    "regions", "surface region", "labels", "annotations", "planes", "camera", "light"
+    "labels", "annotations", "planes", "camera", "light"
 )
 HELPER_NAME_KEYWORDS = (
-    "plane", "slice", "section", "cutter", "boolean", "box", "cube", "grid",
+    "plane", "slice", "cutter", "boolean", "box", "cube", "grid",
     "mri", "gizmo", "panel", "frame", "background", "backdrop", "quad", "rect",
     "arrow", "pointer", "marker", "profile", "bevel", "camera", "light", "lamp", "empty"
 )
@@ -101,7 +101,7 @@ def classify_object(obj):
     for sys_id, keywords in SYSTEM_RULES:
         if any(kw in combined for kw in keywords):
             return sys_id
-    return None
+    return "digestive"
 
 def classify_subtype(sys_id, name_str, region_str):
     if sys_id == "lymphatica": return "lymph"
@@ -136,9 +136,7 @@ def is_helper_object(obj, col_names_lower):
         return True
     if any(kw in lower_n for kw in HELPER_NAME_KEYWORDS):
         return True
-    if "region" in lower_n or "triangle" in lower_n:
-        return True
-    if is_flat_plane_or_box(obj):
+        if is_flat_plane_or_box(obj):
         return True
     if obj.type == "CURVE":
         d = obj.data
