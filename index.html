@@ -3,49 +3,56 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>Atlas Anatomicus 3D — Terminologia Anatomica (TA2)</title>
+  <title>Atlas Anatomicus 3D</title>
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
   <div id="viewport"></div>
-  <div id="pinsLayer" class="pins-layer"></div>
 
-  <header class="hud-top">
-    <div class="brand-chip">Atlas 3D • TA2</div>
-    <button id="btnColorMode" class="hud-mini-btn" title="Doğal / Atlas Renklendirme Modu">Renk: Doğal</button>
-    <button id="btnReset" class="hud-mini-btn">Sıfırla</button>
-  </header>
-
-  <div id="statusBar" class="status-bar">Yükleniyor...</div>
-
-  <div id="selectedPill" class="selected-pill hidden">
-    <div class="sel-text" id="btnOpenDetailFromPill">
-      <strong id="pillLatin">-</strong>
-      <small id="pillSub">-</small>
-    </div>
-    <button id="btnPillFade" class="pill-action">Fade</button>
-    <button id="btnPillHide" class="pill-action">Gizle</button>
-    <button id="btnPillIsolate" class="pill-action">İzole</button>
-    <button id="btnPillClose" class="pill-close">✕</button>
+  <!-- Tek ve %100 mesh-merkezli temiz etiket pini (sadece secili yapida gorunur) -->
+  <div id="singlePin" class="single-pin hidden">
+    <span class="pin-dot"></span>
+    <span id="singlePinText"></span>
   </div>
+
+  <!-- Ultra-sade 2 koseli ust kontrol (ekranin %90'i saf 3D model) -->
+  <header class="minimal-top">
+    <button id="btnMenu" class="fab-pill">☰ Systemata</button>
+    <button id="btnSearch" class="fab-pill">Ara</button>
+  </header>
 
   <div id="toast" class="toast hidden"></div>
 
+  <!-- Secili Yapi Icin Altta Tek Kompakt Kart -->
+  <div id="selectionCard" class="selection-card hidden">
+    <div class="sel-head">
+      <div class="sel-titles" id="btnExpandInfo">
+        <strong id="selLatin">-</strong>
+        <small id="selTr">-</small>
+      </div>
+      <button id="btnClearSel" class="close-x">✕</button>
+    </div>
+    <p id="selNote" class="sel-note hidden"></p>
+    <div class="sel-actions">
+      <button id="btnActFocus" class="act-btn">Odaklan</button>
+      <button id="btnActIsolate" class="act-btn">İzole</button>
+      <button id="btnActFade" class="act-btn">Fade</button>
+      <button id="btnActHide" class="act-btn">Gizle</button>
+    </div>
+  </div>
+
+  <!-- Tek Duzenli Alt Pencere (Systemata / Ara / Araclar) -->
   <section id="sheet" class="sheet hidden">
     <div class="sheet-header">
-      <h3 id="sheetTitle">Menü</h3>
-      <button id="btnCloseSheet" class="sheet-close">✕ Kapat</button>
+      <div class="sheet-tabs">
+        <button data-tab="systems" class="stab active">Systemata</button>
+        <button data-tab="tools" class="stab">Araçlar</button>
+        <button data-tab="search" class="stab">Ara (TA2)</button>
+      </div>
+      <button id="btnCloseSheet" class="close-x">✕</button>
     </div>
     <div id="sheetBody" class="sheet-body"></div>
   </section>
-
-  <nav class="bottom-nav">
-    <button data-sheet="systems" class="nav-btn">Systemata</button>
-    <button data-sheet="search" class="nav-btn">Ara (TA2)</button>
-    <button data-sheet="camera" class="nav-btn">Kamera</button>
-    <button data-sheet="slice" class="nav-btn">Kesit</button>
-    <button id="btnPins" class="nav-btn">Pinler</button>
-  </nav>
 
   <script type="module" src="/src/main.js"></script>
 </body>

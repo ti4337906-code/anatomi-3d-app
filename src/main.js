@@ -3,11 +3,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { findClinicalNote } from './anatomy-tr.js';
+import { findClinicalInfo } from './anatomy-tr.js';
 import { getMicroBumpTexture, getPBRProfile } from './pbr-textures.js';
 import {
   STUDY_PRESETS,
   createAtlasState,
+  unloadSystemEntities,
+  getActiveSurfacePins,
   applyStudyPreset,
   registerMeshToEntity,
   computeEntityVisual,
@@ -18,16 +20,20 @@ import {
 } from './atlas-core.js';
 
 const viewport = document.getElementById('viewport');
-const pinsLayer = document.getElementById('pinsLayer');
-const statusBar = document.getElementById('statusBar');
+const singlePin = document.getElementById('singlePin');
+const singlePinText = document.getElementById('singlePinText');
+const selectionCard = document.getElementById('selectionCard');
 const sheet = document.getElementById('sheet');
-const sheetTitle = document.getElementById('sheetTitle');
 const sheetBody = document.getElementById('sheetBody');
-const selectedPill = document.getElementById('selectedPill');
+
+// Overlay container for isolated bone/organ surface-snapped osteology pins
+const surfacePinsLayer = document.createElement('div');
+surfacePinsLayer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:15;overflow:hidden;';
+document.body.appendChild(surfacePinsLayer);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(42, viewport.clientWidth / viewport.clientHeight, 0.005, 200);
-camera.position.set(0, 1.0, 2.8);
+camera.position.set(0, 1.0, 2.2);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -47,7 +53,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.target.set(0, 0.9, 0);
-controls.minDistance = 0.06;
+controls.minDistance = 0.05;
 controls.maxDistance = 12;
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x2b303b, 0.72));
@@ -57,11 +63,9 @@ keyL.castShadow = true;
 keyL.shadow.mapSize.set(1024, 1024);
 keyL.shadow.bias = -0.0005;
 scene.add(keyL);
-
 const fillL = new THREE.DirectionalLight(0xdbeafe, 0.52);
 fillL.position.set(-4.5, 2.0, 2.5);
 scene.add(fillL);
-
 const rimL = new THREE.DirectionalLight(0xe2e8f0, 0.65);
 rimL.position.set(0, 4.0, -5.5);
 scene.add(rimL);
@@ -84,48 +88,61 @@ const systemLoaded = {};
 const systemLoading = {};
 const meshToEntity = new Map();
 
-let pinsEnabled = false;
-let activeSheet = null;
+let activeTab = null;
 let bodyBounds = { minY: 0, maxY: 1.85, center: new THREE.Vector3(0, 0.92, 0), height: 1.85 };
-
-const landmarkMarker = new THREE.Mesh(
-  new THREE.SphereGeometry(0.007, 16, 16),
-  new THREE.MeshBasicMaterial({ color: 0xdc2626, depthTest: false })
-);
-landmarkMarker.renderOrder = 999;
-landmarkMarker.visible = false;
-scene.add(landmarkMarker);
 
 function toast(msg) {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.classList.remove('hidden');
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => el.classList.add('hidden'), 2200);
+  toast._t = setTimeout(() => el.classList.add('hidden'), 2000);
 }
 
 function closeSheet() {
-  activeSheet = null;
+  activeTab = null;
   sheet.classList.add('hidden');
-  document.querySelectorAll('.nav-btn[data-sheet]').forEach(b => b.classList.remove('active'));
 }
 
-function openSheet(type) {
-  if (activeSheet === type) { closeSheet(); return; }
-  activeSheet = type;
+function openSheet(tab) {
+  activeTab = tab;
   sheet.classList.remove('hidden');
-  document.querySelectorAll('.nav-btn[data-sheet]').forEach(b => b.classList.toggle('active', b.dataset.sheet === type));
-  if (type === 'systems') renderSystemsSheet();
-  else if (type === 'search') renderSearchSheet();
-  else if (type === 'camera') renderCameraSheet();
-  else if (type === 'slice') renderSliceSheet();
-  else if (type === 'detail') renderDetailSheet();
+  selectionCard.classList.add('hidden');
+  document.querySelectorAll('.stab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  if (tab === 'systems') renderSystemsTab();
+  else if (tab === 'tools') renderToolsTab();
+  else if (tab === 'search') renderSearchTab();
 }
 
+document.getElementById('btnMenu').addEventListener('click', () => activeTab ? closeSheet() : openSheet('systems'));
+document.getElementById('btnSearch').addEventListener('click', () => openSheet('search'));
 document.getElementById('btnCloseSheet').addEventListener('click', closeSheet);
-document.querySelectorAll('.nav-btn[data-sheet]').forEach(btn => {
-  btn.addEventListener('click', () => openSheet(btn.dataset.sheet));
-});
+document.querySelectorAll('.stab').forEach(b => b.addEventListener('click', () => openSheet(b.dataset.tab)));
+
+// Real GPU memory disposal when a heavy CT/MRI layer is turned OFF
+function disposeSystemGPU(sysId) {
+  const g = systemGroups[sysId];
+  if (!g || !systemLoaded[sysId]) return;
+  g.traverse(obj => {
+    if (obj.isMesh) {
+      meshToEntity.delete(obj);
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach(m => {
+          if (m.map) m.map.dispose();
+          if (m.normalMap) m.normalMap.dispose();
+          if (m.roughnessMap) m.roughnessMap.dispose();
+          if (m.aoMap) m.aoMap.dispose();
+          m.dispose();
+        });
+      }
+    }
+  });
+  while (g.children.length > 0) g.remove(g.children[0]);
+  unloadSystemEntities(state, sysId);
+  systemLoaded[sysId] = false;
+}
 
 async function init() {
   try {
@@ -133,14 +150,14 @@ async function init() {
     if (!res.ok) throw new Error('manifest.json bulunamadı');
     manifest = await res.json();
   } catch (e) {
-    statusBar.textContent = 'Model manifesti bulunamadı';
+    toast('Model dosyaları bulunamadı');
     return;
   }
 
   try {
-    const lres = await fetch('./models/landmarks.json');
-    if (lres.ok) state.landmarks = await lres.json();
-  } catch (e) { state.landmarks = []; }
+    const pres = await fetch('./models/surface_pins.json');
+    if (pres.ok) state.surfacePins = await pres.json();
+  } catch (e) { state.surfacePins = {}; }
 
   manifest.systems.forEach((sys) => {
     const g = new THREE.Group();
@@ -155,24 +172,16 @@ async function init() {
     };
   });
 
-  // Load default cardio + respiratory + digestive + translucent skeleton
   const defaults = manifest.systems.filter(s => s.defaultVisible && !s.standalone);
-  for (const s of defaults) {
-    await loadSystem(s.id);
-  }
+  for (const s of defaults) await loadSystem(s.id);
   fitCameraToModel(true);
   refreshAllVisuals();
-  updateStatusBar();
-}
-
-function updateStatusBar() {
-  statusBar.textContent = `${state.entities.size} structurae • ${state.landmarks.length} puncta (TA2)`;
 }
 
 function loadSystem(sysId) {
   if (!systemMeta[sysId] || systemLoaded[sysId] || systemLoading[sysId]) return Promise.resolve();
   systemLoading[sysId] = true;
-  statusBar.textContent = `${systemMeta[sysId].name} yükleniyor...`;
+  toast(`${systemMeta[sysId].name} yükleniyor...`);
 
   return new Promise((resolve) => {
     gltfLoader.load(
@@ -181,9 +190,7 @@ function loadSystem(sysId) {
         const root = gltf.scene;
         root.traverse(obj => {
           if (!obj.isMesh) return;
-          if (obj.geometry && !obj.geometry.attributes.normal) {
-            obj.geometry.computeVertexNormals();
-          }
+          if (obj.geometry && !obj.geometry.attributes.normal) obj.geometry.computeVertexNormals();
 
           const ud = obj.userData || {};
           const ent = registerMeshToEntity(state, {
@@ -225,12 +232,11 @@ function loadSystem(sysId) {
           obj.material = mat;
           obj.castShadow = true;
           obj.receiveShadow = true;
-
           meshToEntity.set(obj, ent);
         });
 
-        // Standalone HD regional modules (Cor HD, Encephalon HD) normalized to inspect cleanly
-        if (systemMeta[sysId].standalone) {
+        // Align standalone CT/MRI models (keep NIH HRA organs in their shared CCF coordinate frame!)
+        if (systemMeta[sysId].standalone && systemMeta[sysId].group !== 'ct_hra') {
           const b = new THREE.Box3().setFromObject(root);
           if (!b.isEmpty()) {
             const sz = b.getSize(new THREE.Vector3());
@@ -246,7 +252,6 @@ function loadSystem(sysId) {
         systemGroups[sysId].add(root);
         systemLoaded[sysId] = true;
         systemLoading[sysId] = false;
-        updateStatusBar();
         resolve();
       },
       undefined,
@@ -288,17 +293,18 @@ function fitCameraToModel(resetView = false) {
   bodyBounds = { minY: finalBox.min.y, maxY: finalBox.max.y, center, height: size.y || 1.85 };
 
   if (resetView) {
-    const dist = Math.max(size.x, size.y, size.z) * 1.18;
+    const dist = Math.max(size.x, size.y, size.z) * 1.15;
     controls.target.set(center.x, bodyBounds.maxY - bodyBounds.height * 0.36, center.z);
     camera.position.set(center.x, bodyBounds.maxY - bodyBounds.height * 0.34, center.z + dist * 0.72);
     controls.update();
   }
 }
 
-function focusSystemGroup(sysId) {
-  const g = systemGroups[sysId];
-  if (!g) return;
-  const box = new THREE.Box3().setFromObject(g);
+function focusSystemGroups(sysIds) {
+  const box = new THREE.Box3();
+  for (const id of sysIds) {
+    if (systemGroups[id] && systemLoaded[id]) box.expandByObject(systemGroups[id]);
+  }
   if (box.isEmpty()) return;
   const center = box.getCenter(new THREE.Vector3());
   const diag = box.getSize(new THREE.Vector3()).length();
@@ -334,14 +340,14 @@ function refreshAllVisuals() {
   }
 }
 
-function getEntityBoundingBox(ent) {
+function getEntityBox(ent) {
   const box = new THREE.Box3();
-  for (const mesh of ent.meshes) box.expandByObject(mesh);
+  for (const m of ent.meshes) box.expandByObject(m);
   return box;
 }
 
 function focusEntity(ent) {
-  const box = getEntityBoundingBox(ent);
+  const box = getEntityBox(ent);
   if (box.isEmpty()) return;
   const center = box.getCenter(new THREE.Vector3());
   const diag = box.getSize(new THREE.Vector3()).length();
@@ -349,36 +355,6 @@ function focusEntity(ent) {
   controls.target.set(pose.target.x, pose.target.y, pose.target.z);
   camera.position.set(pose.position.x, pose.position.y, pose.position.z);
   controls.update();
-}
-
-function getLandmarkWorldPos(lm) {
-  return new THREE.Vector3(lm.pos[0], lm.pos[1], lm.pos[2]).applyMatrix4(modelRoot.matrixWorld);
-}
-
-async function focusLandmark(lm) {
-  if (state.systems[lm.system]) {
-    state.systems[lm.system].visible = true;
-    if (!systemLoaded[lm.system]) await loadSystem(lm.system);
-    fitCameraToModel(false);
-    refreshAllVisuals();
-  }
-  modelRoot.updateMatrixWorld(true);
-  const wpos = getLandmarkWorldPos(lm);
-  state.selectedId = null;
-  state.isolateMode = false;
-  state.activeLandmark = lm;
-  landmarkMarker.position.copy(wpos);
-  landmarkMarker.visible = true;
-
-  const pose = computeSafeFocusPose(camera.position, controls.target, wpos, 0.14);
-  controls.target.set(pose.target.x, pose.target.y, pose.target.z);
-  camera.position.set(pose.position.x, pose.position.y, pose.position.z);
-  controls.update();
-
-  document.getElementById('pillLatin').textContent = lm.latin;
-  document.getElementById('pillSub').textContent = `${lm.ta2 ? lm.ta2 + ' • ' : ''}Punctum anatomicum`;
-  selectedPill.classList.remove('hidden');
-  toast(`Odaklandı: ${lm.latin}`);
 }
 
 // Raycast Picking
@@ -389,7 +365,7 @@ let downXY = { x: 0, y: 0 };
 renderer.domElement.addEventListener('pointerdown', e => { downXY = { x: e.clientX, y: e.clientY }; });
 renderer.domElement.addEventListener('pointerup', e => {
   if (Math.hypot(e.clientX - downXY.x, e.clientY - downXY.y) > 8) return;
-  if (activeSheet) { closeSheet(); return; }
+  if (activeTab) { closeSheet(); return; }
 
   const rect = renderer.domElement.getBoundingClientRect();
   ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -408,113 +384,149 @@ renderer.domElement.addEventListener('pointerup', e => {
 });
 
 function selectEntity(ent, focus = true) {
-  state.activeLandmark = null;
-  landmarkMarker.visible = false;
   state.selectedId = ent.id;
-  document.getElementById('pillLatin').textContent = ent.latin;
-  document.getElementById('pillSub').textContent = `${ent.ta2 ? ent.ta2 + ' • ' : ''}${ent.name}`;
-  document.getElementById('btnPillFade').classList.toggle('active', ent.faded);
-  document.getElementById('btnPillIsolate').classList.toggle('active', state.isolateMode);
-  selectedPill.classList.remove('hidden');
+  const info = findClinicalInfo(ent.latin, ent.name);
+  document.getElementById('selLatin').textContent = ent.latin;
+  document.getElementById('selTr').textContent = info
+    ? `${info.tr}${ent.ta2 ? ' • TA2: ' + ent.ta2 : ''}`
+    : `${ent.ta2 ? 'TA2: ' + ent.ta2 + ' • ' : ''}${ent.region}`;
+
+  const noteEl = document.getElementById('selNote');
+  if (info && info.note) {
+    noteEl.textContent = info.note;
+    noteEl.classList.remove('hidden');
+  } else {
+    noteEl.classList.add('hidden');
+  }
+
+  document.getElementById('btnActFade').classList.toggle('active', ent.faded);
+  document.getElementById('btnActIsolate').classList.toggle('active', state.isolateMode);
+  selectionCard.classList.remove('hidden');
   refreshAllVisuals();
   if (focus) focusEntity(ent);
 }
 
 function clearSelection() {
   state.selectedId = null;
-  state.activeLandmark = null;
   state.isolateMode = false;
-  landmarkMarker.visible = false;
-  document.getElementById('btnPillIsolate').classList.remove('active');
-  document.getElementById('btnPillFade').classList.remove('active');
-  selectedPill.classList.add('hidden');
-  if (activeSheet === 'detail') closeSheet();
+  selectionCard.classList.add('hidden');
+  singlePin.classList.add('hidden');
+  surfacePinsLayer.innerHTML = '';
   refreshAllVisuals();
 }
 
-document.getElementById('btnColorMode').addEventListener('click', (e) => {
-  state.colorMode = state.colorMode === 'natural' ? 'atlas' : 'natural';
-  const isAtlas = state.colorMode === 'atlas';
-  e.target.textContent = isAtlas ? 'Renk: Atlas' : 'Renk: Doğal';
-  e.target.classList.toggle('active', isAtlas);
-  refreshAllVisuals();
-  toast(isAtlas ? 'Atlas Modu: Arter Kırmızı • Ven Mavi • Lenf Yeşil • Sinir Sarı' : 'Doğal PBR anatomik dokular aktif');
-});
+function updatePins() {
+  const ent = state.entities.get(state.selectedId);
+  if (!ent) {
+    singlePin.classList.add('hidden');
+    surfacePinsLayer.innerHTML = '';
+    return;
+  }
 
-document.getElementById('btnOpenDetailFromPill').addEventListener('click', () => (state.selectedId || state.activeLandmark) && openSheet('detail'));
-document.getElementById('btnPillClose').addEventListener('click', clearSelection);
-document.getElementById('btnPillFade').addEventListener('click', (e) => {
+  const box = getEntityBox(ent);
+  if (!box.isEmpty()) {
+    const center = box.getCenter(new THREE.Vector3());
+    const proj = center.project(camera);
+    if (proj.z <= 1) {
+      singlePin.style.left = `${(proj.x * 0.5 + 0.5) * viewport.clientWidth}px`;
+      singlePin.style.top = `${(-proj.y * 0.5 + 0.5) * viewport.clientHeight}px`;
+      singlePinText.textContent = ent.latin;
+      singlePin.classList.remove('hidden');
+    } else {
+      singlePin.classList.add('hidden');
+    }
+  }
+
+  // Show surface-snapped osteology/organ pins ONLY when isolated (zero clutter!)
+  surfacePinsLayer.innerHTML = '';
+  const pins = getActiveSurfacePins(state);
+  if (!pins.length) return;
+
+  modelRoot.updateMatrixWorld(true);
+  const w = viewport.clientWidth;
+  const h = viewport.clientHeight;
+  pins.forEach(p => {
+    const wp = new THREE.Vector3(p.pos[0], p.pos[1], p.pos[2]).applyMatrix4(modelRoot.matrixWorld);
+    const pr = wp.project(camera);
+    if (pr.z > 1) return;
+    const x = (pr.x * 0.5 + 0.5) * w;
+    const y = (-pr.y * 0.5 + 0.5) * h;
+    if (x < 10 || x > w - 10 || y < 10 || y > h - 10) return;
+    const tag = document.createElement('div');
+    tag.className = 'single-pin';
+    tag.style.left = `${x}px`;
+    tag.style.top = `${y}px`;
+    tag.innerHTML = `<span class="pin-dot" style="background:#38bdf8"></span>${p.latin}`;
+    surfacePinsLayer.appendChild(tag);
+  });
+}
+
+document.getElementById('btnClearSel').addEventListener('click', clearSelection);
+document.getElementById('btnActFocus').addEventListener('click', () => {
+  const ent = state.entities.get(state.selectedId);
+  if (ent) focusEntity(ent);
+});
+document.getElementById('btnActFade').addEventListener('click', (e) => {
   const ent = state.entities.get(state.selectedId);
   if (!ent) return;
   ent.faded = !ent.faded;
   e.target.classList.toggle('active', ent.faded);
   refreshAllVisuals();
 });
-document.getElementById('btnPillHide').addEventListener('click', () => {
+document.getElementById('btnActHide').addEventListener('click', () => {
   const ent = state.entities.get(state.selectedId);
   if (!ent) return;
   ent.hidden = true;
   toast(`${ent.latin} gizlendi`);
   clearSelection();
 });
-document.getElementById('btnPillIsolate').addEventListener('click', (e) => {
+document.getElementById('btnActIsolate').addEventListener('click', (e) => {
   const ent = state.entities.get(state.selectedId);
   if (!ent) return;
   const iso = toggleIsolate(state);
   e.target.classList.toggle('active', iso);
-  document.getElementById('btnPillFade').classList.toggle('active', ent.faded);
+  document.getElementById('btnActFade').classList.toggle('active', ent.faded);
   refreshAllVisuals();
   if (iso) focusEntity(ent);
 });
 
-function renderSystemsSheet() {
-  sheetTitle.textContent = 'Systemata Anatomica (TA2)';
+function renderSystemsTab() {
   sheetBody.innerHTML = `
-    <div class="legend-row">
-      <span class="legend-item"><span class="sys-dot" style="background:#d92626"></span>Arteriae</span>
-      <span class="legend-item"><span class="sys-dot" style="background:#1d4ed8"></span>Venae</span>
-      <span class="legend-item"><span class="sys-dot" style="background:#16a34a"></span>Lymphatica</span>
-      <span class="legend-item"><span class="sys-dot" style="background:#eab308"></span>Nervi</span>
-    </div>
-    <div id="presetGrid" class="cam-grid" style="margin-bottom:10px;"></div>
+    <div class="section-label">Hızlı BT/MR & Çalışma Modları</div>
+    <div id="pGrid" class="grid-2"></div>
+    <div class="section-label">BT/MR Yüksek Detaylı Modüller (NIH HRA • CAHID • MR)</div>
+    <div id="ctRows"></div>
+    <div class="section-label">Tam Vücut Katmanları (Z-Anatomy TA2)</div>
+    <div id="zRows"></div>
   `;
 
-  const pGrid = document.getElementById('presetGrid');
+  const pGrid = document.getElementById('pGrid');
   Object.entries(STUDY_PRESETS).forEach(([key, cfg]) => {
-    if (key === 'cor_hd' && !systemMeta.cor_hd) return;
+    const validIds = cfg.systems.filter(id => !!systemMeta[id]);
+    if (!validIds.length) return;
     const b = document.createElement('button');
-    b.className = 'cam-tile';
+    b.className = 'tile-btn';
     b.textContent = cfg.label;
     b.onclick = async () => {
       const toEnable = applyStudyPreset(state, key);
+      // Free GPU memory from closed heavy standalone modules
+      for (const sid of Object.keys(systemMeta)) {
+        if (!state.systems[sid].visible && systemLoaded[sid] && systemMeta[sid].standalone) {
+          disposeSystemGPU(sid);
+        }
+      }
       for (const sid of toEnable) {
         if (!systemLoaded[sid]) await loadSystem(sid);
       }
       refreshAllVisuals();
-      if (toEnable.length === 1 && systemMeta[toEnable[0]].standalone) {
-        focusSystemGroup(toEnable[0]);
-      } else {
-        fitCameraToModel(true);
-      }
-      renderSystemsSheet();
-      toast(`${cfg.label} yüklendi`);
+      focusSystemGroups(toEnable);
+      closeSheet();
     };
     pGrid.appendChild(b);
   });
 
-  let modCount = 0;
-  for (const e of state.entities.values()) if (e.hidden || e.faded) modCount++;
-  if (modCount > 0) {
-    const restoreBtn = document.createElement('button');
-    restoreBtn.className = 'item-btn';
-    restoreBtn.innerHTML = `<strong>Gizli / Saydam Yapıları Sıfırla (${modCount})</strong>`;
-    restoreBtn.onclick = () => {
-      for (const e of state.entities.values()) { e.hidden = false; e.faded = false; }
-      refreshAllVisuals();
-      renderSystemsSheet();
-    };
-    sheetBody.appendChild(restoreBtn);
-  }
+  const ctRows = document.getElementById('ctRows');
+  const zRows = document.getElementById('zRows');
 
   Object.keys(systemMeta).forEach(sysId => {
     const m = systemMeta[sysId];
@@ -527,7 +539,7 @@ function renderSystemsSheet() {
           <span class="sys-dot" style="background:${m.color}"></span>
           <div>
             <div>${m.name}</div>
-            <div class="sys-meta">${m.tr || ''} • ${m.meshCount} yapı • ${m.sizeMB} MB</div>
+            <div class="sys-meta">${m.tr || ''} • ${m.sizeMB || 0} MB</div>
           </div>
         </div>
         <button class="toggle-btn ${st.visible ? 'on' : ''}">${st.visible ? 'AÇIK' : 'KAPALI'}</button>
@@ -541,13 +553,19 @@ function renderSystemsSheet() {
     const btn = row.querySelector('.toggle-btn');
     btn.onclick = async () => {
       st.visible = !st.visible;
-      if (st.visible && !systemLoaded[sysId]) {
-        btn.textContent = 'Yükleniyor...';
-        await loadSystem(sysId);
+      if (st.visible) {
+        if (!systemLoaded[sysId]) {
+          btn.textContent = '...';
+          await loadSystem(sysId);
+        }
+        refreshAllVisuals();
+        if (m.standalone || sysId === 'cor_detail') focusSystemGroups([sysId]);
+      } else {
+        // Free GPU RAM immediately when heavy CT/MRI module is closed
+        if (m.standalone) disposeSystemGPU(sysId);
+        refreshAllVisuals();
       }
-      refreshAllVisuals();
-      if (st.visible && m.standalone) focusSystemGroup(sysId);
-      renderSystemsSheet();
+      renderSystemsTab();
     };
     const sl = row.querySelector('input');
     const lbl = row.querySelectorAll('.slider-row span')[1];
@@ -556,67 +574,8 @@ function renderSystemsSheet() {
       lbl.textContent = `${Math.round(st.opacity * 100)}%`;
       refreshAllVisuals();
     };
-    sheetBody.appendChild(row);
-  });
-}
-
-function renderSearchSheet() {
-  sheetTitle.textContent = 'Terminologia Anatomica (TA2) Ara';
-  sheetBody.innerHTML = '<input id="sInput" class="search-box" type="search" placeholder="Örn: Ostium sinus coronarii, Aorta, Pulmo, Hepar..." /><div id="sList"></div>';
-  const input = document.getElementById('sInput');
-  const list = document.getElementById('sList');
-
-  const draw = () => {
-    const { landmarks: lmMatches, entities: entMatches } = searchAtlas(state, input.value);
-    list.innerHTML = '';
-
-    lmMatches.forEach(lm => {
-      const b = document.createElement('button');
-      b.className = 'item-btn';
-      b.innerHTML = `<strong><span class="badge-pin">PUNCTUM</span>${lm.latin}</strong><small>${lm.ta2 ? lm.ta2 + ' • ' : ''}${lm.region}</small>`;
-      b.onclick = async () => { closeSheet(); await focusLandmark(lm); };
-      list.appendChild(b);
-    });
-
-    entMatches.forEach(ent => {
-      const b = document.createElement('button');
-      b.className = 'item-btn';
-      b.innerHTML = `<strong>${ent.latin}</strong><small>${ent.ta2 ? ent.ta2 + ' • ' : ''}${ent.name}</small>`;
-      b.onclick = () => { selectEntity(ent, true); closeSheet(); };
-      list.appendChild(b);
-    });
-
-    if (!lmMatches.length && !entMatches.length) {
-      list.innerHTML = '<div class="sys-meta">Sonuç bulunamadı. İlgili sistemi Systemata sekmesinden açabilirsiniz.</div>';
-    }
-  };
-  input.oninput = draw;
-  draw();
-}
-
-function renderCameraSheet() {
-  sheetTitle.textContent = 'Plana & Odak Bölgeleri';
-  const c = bodyBounds.center;
-  const h = bodyBounds.height;
-  const views = [
-    ['Cor (Kalp)',     [c.x + 0.03, bodyBounds.maxY - h * 0.29, c.z + h * 0.32], [c.x + 0.02, bodyBounds.maxY - h * 0.29, c.z]],
-    ['Pulmones',       [c.x, bodyBounds.maxY - h * 0.28, c.z + h * 0.48],        [c.x, bodyBounds.maxY - h * 0.28, c.z]],
-    ['Hepar & Gaster', [c.x, bodyBounds.maxY - h * 0.40, c.z + h * 0.44],        [c.x, bodyBounds.maxY - h * 0.40, c.z]],
-    ['Intestina',      [c.x, bodyBounds.maxY - h * 0.49, c.z + h * 0.46],        [c.x, bodyBounds.maxY - h * 0.49, c.z]],
-    ['Anterior',       [c.x, c.y, c.z + h * 1.42], [c.x, c.y, c.z]],
-    ['Posterior',      [c.x, c.y, c.z - h * 1.42], [c.x, c.y, c.z]],
-    ['Dexter',         [c.x - h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
-    ['Sinister',       [c.x + h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
-    ['Totus',          [c.x, c.y, c.z + h * 1.48], [c.x, c.y, c.z]]
-  ];
-  sheetBody.innerHTML = '<div class="cam-grid"></div>';
-  const grid = sheetBody.querySelector('.cam-grid');
-  views.forEach(([label, pos, tgt]) => {
-    const b = document.createElement('button');
-    b.className = 'cam-tile';
-    b.textContent = label;
-    b.onclick = () => { camera.position.set(...pos); controls.target.set(...tgt); controls.update(); closeSheet(); };
-    grid.appendChild(b);
+    if (m.group === 'ct_hd' || m.group === 'ct_hra' || m.group === 'custom') ctRows.appendChild(row);
+    else zRows.appendChild(row);
   });
 }
 
@@ -626,120 +585,96 @@ function applyClip() {
   clipPlane.constant = cfg.constant;
 }
 
-function renderSliceSheet() {
-  sheetTitle.textContent = 'Sectio Anatomica (Kesit)';
+function renderToolsTab() {
   const min = state.sliceAxis === 'axial' ? bodyBounds.minY : -0.6;
   const max = state.sliceAxis === 'axial' ? bodyBounds.maxY + 0.05 : 0.6;
   sheetBody.innerHTML = `
-    <div class="cam-grid" style="margin-bottom:12px;">
-      <button data-ax="axial" class="cam-tile ${state.sliceAxis === 'axial' ? 'active' : ''}">Transversalis</button>
-      <button data-ax="sagittal" class="cam-tile ${state.sliceAxis === 'sagittal' ? 'active' : ''}">Sagittalis</button>
-      <button data-ax="coronal" class="cam-tile ${state.sliceAxis === 'coronal' ? 'active' : ''}">Coronalis</button>
+    <div class="section-label">Renklendirme Modu</div>
+    <div class="grid-2">
+      <button id="mNat" class="tile-btn ${state.colorMode === 'natural' ? 'active' : ''}">Doğal (PBR)</button>
+      <button id="mAtl" class="tile-btn ${state.colorMode === 'atlas' ? 'active' : ''}">Atlas (Arter/Ven/Lenf)</button>
     </div>
-    <div class="slider-row" style="margin-bottom:12px;">
-      <span>Kesit</span>
+
+    <div class="section-label">Sectio Anatomica (Kesit)</div>
+    <div class="grid-3">
+      <button data-ax="axial" class="tile-btn ${state.sliceAxis === 'axial' ? 'active' : ''}">Transversalis</button>
+      <button data-ax="sagittal" class="tile-btn ${state.sliceAxis === 'sagittal' ? 'active' : ''}">Sagittalis</button>
+      <button data-ax="coronal" class="tile-btn ${state.sliceAxis === 'coronal' ? 'active' : ''}">Coronalis</button>
+    </div>
+    <div class="slider-row" style="margin-bottom:10px;">
       <input id="slSlice" type="range" min="${min}" max="${max}" step="0.02" value="${Math.min(max, Math.max(min, state.sliceValue))}" />
+      <button id="btnSliceOn" class="toggle-btn ${state.sliceEnabled ? 'on' : ''}">${state.sliceEnabled ? 'AÇIK' : 'KAPALI'}</button>
     </div>
-    <button id="btnToggleSlice" class="item-btn" style="text-align:center;">
-      <strong>${state.sliceEnabled ? 'Kesiti Kapat' : 'Kesiti Etkinleştir'}</strong>
-    </button>
+
+    <div class="section-label">Kamera Açıları</div>
+    <div id="camGrid" class="grid-3"></div>
+
+    <button id="btnFullReset" class="tile-btn" style="width:100%;margin-top:6px;">Tüm Diseksiyonu ve Kamerayı Sıfırla</button>
   `;
+
+  document.getElementById('mNat').onclick = () => { state.colorMode = 'natural'; refreshAllVisuals(); renderToolsTab(); };
+  document.getElementById('mAtl').onclick = () => { state.colorMode = 'atlas'; refreshAllVisuals(); renderToolsTab(); };
+
   sheetBody.querySelectorAll('[data-ax]').forEach(b => {
-    b.onclick = () => {
-      state.sliceAxis = b.dataset.ax;
-      state.sliceEnabled = true;
-      state.sliceValue = state.sliceAxis === 'axial' ? bodyBounds.center.y : 0;
-      applyClip();
-      renderSliceSheet();
-    };
+    b.onclick = () => { state.sliceAxis = b.dataset.ax; state.sliceEnabled = true; state.sliceValue = state.sliceAxis === 'axial' ? bodyBounds.center.y : 0; applyClip(); renderToolsTab(); };
   });
-  document.getElementById('slSlice').oninput = (e) => {
-    state.sliceEnabled = true;
-    state.sliceValue = parseFloat(e.target.value);
+  document.getElementById('slSlice').oninput = (e) => { state.sliceEnabled = true; state.sliceValue = parseFloat(e.target.value); applyClip(); };
+  document.getElementById('btnSliceOn').onclick = () => { state.sliceEnabled = !state.sliceEnabled; applyClip(); renderToolsTab(); };
+
+  const c = bodyBounds.center;
+  const h = bodyBounds.height;
+  const views = [
+    ['Cor',      [c.x + 0.03, bodyBounds.maxY - h * 0.29, c.z + h * 0.3],  [c.x + 0.02, bodyBounds.maxY - h * 0.29, c.z]],
+    ['Pulmones', [c.x, bodyBounds.maxY - h * 0.28, c.z + h * 0.46],        [c.x, bodyBounds.maxY - h * 0.28, c.z]],
+    ['Abdomen',  [c.x, bodyBounds.maxY - h * 0.43, c.z + h * 0.46],        [c.x, bodyBounds.maxY - h * 0.43, c.z]],
+    ['Anterior', [c.x, c.y, c.z + h * 1.4], [c.x, c.y, c.z]],
+    ['Posterior',[c.x, c.y, c.z - h * 1.4], [c.x, c.y, c.z]],
+    ['Dexter',   [c.x - h * 1.4, c.y, c.z], [c.x, c.y, c.z]]
+  ];
+  const cg = document.getElementById('camGrid');
+  views.forEach(([lbl, pos, tgt]) => {
+    const b = document.createElement('button');
+    b.className = 'tile-btn';
+    b.textContent = lbl;
+    b.onclick = () => { camera.position.set(...pos); controls.target.set(...tgt); controls.update(); closeSheet(); };
+    cg.appendChild(b);
+  });
+
+  document.getElementById('btnFullReset').onclick = () => {
+    for (const e of state.entities.values()) { e.hidden = false; e.faded = false; }
+    state.sliceEnabled = false;
     applyClip();
-  };
-  document.getElementById('btnToggleSlice').onclick = () => {
-    state.sliceEnabled = !state.sliceEnabled;
-    applyClip();
-    renderSliceSheet();
+    clearSelection();
+    fitCameraToModel(true);
+    closeSheet();
+    toast('Sıfırlandı');
   };
 }
 
-function renderDetailSheet() {
-  const ent = state.entities.get(state.selectedId);
-  const target = ent || state.activeLandmark;
-  if (!target) return;
-  sheetTitle.textContent = ent ? 'Structura Anatomica' : 'Punctum Anatomicum';
-  const note = findClinicalNote(`${target.latin} ${target.name}`);
-  sheetBody.innerHTML = `
-    <div class="detail-card">
-      <p><strong>Terminologia Anatomica (Latince):</strong> ${target.latin}</p>
-      ${target.ta2 ? `<p><strong>TA2 Kodu:</strong> ${target.ta2}</p>` : ''}
-      <p><strong>Kayıt Adı:</strong> ${target.name}</p>
-      <p><strong>Regio:</strong> ${target.region}</p>
-      ${note ? `<p><strong>Not:</strong> ${note}</p>` : ''}
-      ${ent ? '<button id="btnDetFocus" class="item-btn" style="margin-top:10px;text-align:center;"><strong>Kamerayı Odakla</strong></button>' : ''}
-    </div>
-  `;
-  const bf = document.getElementById('btnDetFocus');
-  if (bf) bf.onclick = () => { focusEntity(ent); closeSheet(); };
-}
+function renderSearchTab() {
+  sheetBody.innerHTML = '<input id="sInput" class="search-box" type="search" placeholder="Latince / TA2 ara (örn: Coronaria, Valva, Pulmo, Hepar)..." /><div id="sList"></div>';
+  const input = document.getElementById('sInput');
+  const list = document.getElementById('sList');
 
-document.getElementById('btnPins').addEventListener('click', (e) => {
-  pinsEnabled = !pinsEnabled;
-  e.target.classList.toggle('active', pinsEnabled);
-  toast(pinsEnabled ? 'Yakın anatomik pinler (TA2) açık' : 'Pinler gizlendi');
-});
-
-function updatePinsOverlay() {
-  pinsLayer.innerHTML = '';
-  if (!pinsEnabled && !state.activeLandmark) return;
-
-  const w = viewport.clientWidth;
-  const h = viewport.clientHeight;
-  const list = [];
-
-  if (state.activeLandmark) list.push({ lm: state.activeLandmark, active: true });
-  if (pinsEnabled) {
-    const camDist = camera.position.distanceTo(controls.target);
-    const maxR = Math.max(0.25, camDist * 0.7);
-    for (let i = 0; i < state.landmarks.length; i++) {
-      const lm = state.landmarks[i];
-      if (!state.systems[lm.system] || !state.systems[lm.system].visible) continue;
-      const wp = getLandmarkWorldPos(lm);
-      const d = wp.distanceTo(controls.target);
-      if (d <= maxR) list.push({ lm, active: lm === state.activeLandmark, d, wp });
+  const draw = () => {
+    const ents = searchAtlas(state, input.value);
+    list.innerHTML = '';
+    if (!ents.length) {
+      list.innerHTML = '<div class="sys-meta">Sonuç yok — önce ilgili katmanı Systemata sekmesinden açın.</div>';
+      return;
     }
-    list.sort((a, b) => (a.d || 0) - (b.d || 0));
-  }
-
-  list.slice(0, 22).forEach(item => {
-    const wp = item.wp || getLandmarkWorldPos(item.lm);
-    const proj = wp.clone().project(camera);
-    if (proj.z > 1) return;
-    const x = (proj.x * 0.5 + 0.5) * w;
-    const y = (-proj.y * 0.5 + 0.5) * h;
-    if (x < 0 || x > w || y < 0 || y > h) return;
-
-    const el = document.createElement('div');
-    el.className = 'pin-tag' + (item.active ? ' active' : '');
-    el.style.left = `${x}px`;
-    el.style.top = `${y}px`;
-    el.textContent = item.lm.latin;
-    el.onclick = () => focusLandmark(item.lm);
-    pinsLayer.appendChild(el);
-  });
+    ents.forEach(ent => {
+      const info = findClinicalInfo(ent.latin, ent.name);
+      const b = document.createElement('button');
+      b.className = 'item-btn';
+      b.innerHTML = `<strong>${ent.latin}</strong><small>${info ? info.tr : ent.name}</small>`;
+      b.onclick = () => { closeSheet(); selectEntity(ent, true); };
+      list.appendChild(b);
+    });
+  };
+  input.oninput = draw;
+  draw();
 }
-
-document.getElementById('btnReset').addEventListener('click', () => {
-  for (const e of state.entities.values()) { e.hidden = false; e.faded = false; }
-  state.sliceEnabled = false;
-  applyClip();
-  clearSelection();
-  closeSheet();
-  fitCameraToModel(true);
-  toast('Görünüm sıfırlandı');
-});
 
 window.addEventListener('resize', () => {
   camera.aspect = viewport.clientWidth / viewport.clientHeight;
@@ -747,12 +682,12 @@ window.addEventListener('resize', () => {
   renderer.setSize(viewport.clientWidth, viewport.clientHeight);
 });
 
-let frameCount = 0;
+let frame = 0;
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
   renderer.render(scene, camera);
-  if ((++frameCount % 3) === 0) updatePinsOverlay();
+  if ((++frame % 2) === 0) updatePins();
 }
 animate();
 init();

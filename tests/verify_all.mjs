@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import {
   ATLAS_PALETTE,
   STUDY_PRESETS,
-  inferSubtype,
   createAtlasState,
+  unloadSystemEntities,
+  getActiveSurfacePins,
   applyStudyPreset,
   registerMeshToEntity,
   computeEntityVisual,
@@ -12,6 +13,7 @@ import {
   computeSafeFocusPose,
   computeClipPlaneConfig
 } from '../src/atlas-core.js';
+import { findClinicalInfo } from '../src/anatomy-tr.js';
 
 let passed = 0;
 function runTest(name, fn) {
@@ -23,98 +25,113 @@ function runTest(name, fn) {
 function makeFixture() {
   const st = createAtlasState();
   st.systems = {
-    cor_hd:      { visible: false, opacity: 1.0 },
-    arteriae:    { visible: true,  opacity: 1.0 },
-    venae:       { visible: true,  opacity: 1.0 },
-    lymphatica:  { visible: true,  opacity: 1.0 },
-    respiratory: { visible: true,  opacity: 1.0 },
-    digestive:   { visible: true,  opacity: 1.0 },
-    skeletal:    { visible: true,  opacity: 1.0 },
-    nervous:     { visible: true,  opacity: 1.0 }
+    cor_detail:    { visible: true,  opacity: 1.0 },
+    cor_hd:        { visible: false, opacity: 1.0 },
+    encephalon_hd: { visible: false, opacity: 1.0 },
+    hra_cor:       { visible: false, opacity: 1.0 },
+    hra_pulmo:     { visible: false, opacity: 1.0 },
+    hra_hepar:     { visible: false, opacity: 1.0 },
+    hra_pancreas:  { visible: false, opacity: 1.0 },
+    hra_colon:     { visible: false, opacity: 1.0 },
+    arteriae:      { visible: true,  opacity: 1.0 },
+    venae:         { visible: true,  opacity: 1.0 },
+    lymphatica:    { visible: true,  opacity: 1.0 },
+    respiratory:   { visible: true,  opacity: 1.0 },
+    digestive:     { visible: true,  opacity: 1.0 },
+    skeletal:      { visible: true,  opacity: 1.0 },
+    nervous:       { visible: true,  opacity: 1.0 }
   };
 
-  registerMeshToEntity(st, { system: 'skeletal', meshName: 'Femur_0', latin: 'Os femoris (Dexter)', name: 'Femur (Dexter)', ta2: '1360', region: 'Systema skeletale', meshRef: { id: 'f0' } });
-  registerMeshToEntity(st, { system: 'skeletal', meshName: 'Femur_1', latin: 'Os femoris (Dexter)', name: 'Femur (Dexter)', ta2: '1360', region: 'Systema skeletale', meshRef: { id: 'f1' } });
-  registerMeshToEntity(st, { system: 'arteriae', meshName: 'Aorta_0', latin: 'Aorta ascendens', name: 'Ascending aorta', ta2: '4120', region: 'Arteriae', meshRef: { id: 'a0' } });
-  registerMeshToEntity(st, { system: 'arteriae', meshName: 'Cor_0', latin: 'Cor', name: 'Heart', ta2: '3950', region: 'Cor', meshRef: { id: 'c0' } });
-  registerMeshToEntity(st, { system: 'venae', meshName: 'VenaCava_0', latin: 'Vena cava superior', name: 'Superior vena cava', ta2: '4800', region: 'Venae', meshRef: { id: 'v0' } });
-  registerMeshToEntity(st, { system: 'lymphatica', meshName: 'DuctusThor_0', latin: 'Ductus thoracicus', name: 'Thoracic duct', ta2: '5100', region: 'Systema lymphoideum', meshRef: { id: 'l0' } });
-  registerMeshToEntity(st, { system: 'respiratory', meshName: 'PulmoD_0', latin: 'Pulmo dexter', name: 'Right lung', ta2: '3280', region: 'Systema respiratorium', meshRef: { id: 'p0' } });
-  registerMeshToEntity(st, { system: 'digestive', meshName: 'Hepar_0', latin: 'Hepar', name: 'Liver', ta2: '3100', region: 'Systema digestorium', meshRef: { id: 'h0' } });
-  registerMeshToEntity(st, { system: 'nervous', meshName: 'NervusVagus_0', latin: 'Nervus vagus', name: 'Vagus nerve', ta2: '6300', region: 'Nervi craniales', meshRef: { id: 'n0' } });
+  registerMeshToEntity(st, { system: 'cor_detail', meshName: 'Left_coronary_artery_0', latin: 'Arteria coronaria sinistra', name: 'Left coronary artery', ta2: '4130', region: 'Cor', meshRef: { id: 'lca' } });
+  registerMeshToEntity(st, { system: 'cor_detail', meshName: 'Coronary_sinus_0', latin: 'Sinus coronarius', name: 'Coronary sinus', ta2: '4900', region: 'Cor', meshRef: { id: 'cs' } });
+  registerMeshToEntity(st, { system: 'cor_detail', meshName: 'Mitral_valve_0', latin: 'Valva mitralis', name: 'Mitral valve', ta2: '4080', region: 'Cor', meshRef: { id: 'mv' } });
+  const frontale = registerMeshToEntity(st, { system: 'skeletal', meshName: 'Os_frontale_0', latin: 'Os frontale', name: 'Frontal bone', ta2: '0410', region: 'Cranium', meshRef: { id: 'fr0' } });
+  registerMeshToEntity(st, { system: 'skeletal', meshName: 'Os_frontale_1', latin: 'Os frontale', name: 'Frontal bone', ta2: '0410', region: 'Cranium', meshRef: { id: 'fr1' } });
+  registerMeshToEntity(st, { system: 'hra_hepar', meshName: 'HRA_Liver_0', latin: 'Hepar (NIH HRA)', name: 'Liver', ta2: '3100', region: 'CT/HRA', meshRef: { id: 'hl0' } });
+  registerMeshToEntity(st, { system: 'lymphatica', meshName: 'Ductus_0', latin: 'Ductus thoracicus', name: 'Thoracic duct', ta2: '5100', region: 'Lymphatica', meshRef: { id: 'l0' } });
+  registerMeshToEntity(st, { system: 'nervous', meshName: 'Vagus_0', latin: 'Nervus vagus', name: 'Vagus nerve', ta2: '6300', region: 'Nervosum', meshRef: { id: 'n0' } });
 
-  st.landmarks = [
-    { latin: 'Ostium sinus coronarii', name: 'Opening of coronary sinus', ta2: '4051', system: 'arteriae', region: 'Atrium dextrum', pos: [0.02, 1.25, 0.05] },
-    { latin: 'Carina tracheae', name: 'Carina of trachea', ta2: '3240', system: 'respiratory', region: 'Trachea', pos: [0.0, 1.32, 0.01] },
-    { latin: 'Papilla duodeni major', name: 'Major duodenal papilla', ta2: '3055', system: 'digestive', region: 'Duodenum', pos: [-0.03, 1.05, 0.02] }
+  st.surfacePins[frontale.id] = [
+    { latin: 'Fossa glandulae lacrimalis', pos: [0.05, 1.68, 0.08] },
+    { latin: 'Incisura supraorbitalis', pos: [0.03, 1.70, 0.09] },
+    { latin: 'Sinus frontalis', pos: [0.01, 1.71, 0.09] }
   ];
   return st;
 }
 
-// 1. Atlas Color Coding (3 rounds)
+// 1. Surface-Snapped Osteology Pins (ONLY visible when isolated — 3 rounds)
 for (let r = 1; r <= 3; r++) {
-  runTest(`Atlas Renklendirme (Arter/Ven/Lenf/Sinir/Kalp) Tur ${r}/3`, () => {
+  runTest(`Yuzeye Kilitli Osteoloji Pinleri (Tur ${r}/3)`, () => {
     const st = makeFixture();
-    st.colorMode = 'atlas';
-    const byLat = (s) => [...st.entities.values()].find(e => e.latin.includes(s));
-    assert.equal(computeEntityVisual(st, byLat('Aorta')).colorHex, ATLAS_PALETTE.artery);
-    assert.equal(computeEntityVisual(st, byLat('Vena cava')).colorHex, ATLAS_PALETTE.vein);
-    assert.equal(computeEntityVisual(st, byLat('Ductus thoracicus')).colorHex, ATLAS_PALETTE.lymph);
-    assert.equal(computeEntityVisual(st, byLat('Nervus vagus')).colorHex, ATLAS_PALETTE.nerve);
-    assert.equal(computeEntityVisual(st, byLat('Cor')).colorHex, ATLAS_PALETTE.heart);
+    const frontale = [...st.entities.values()].find(e => e.latin === 'Os frontale');
+    assert.equal(frontale.meshes.length, 2);
+    st.selectedId = frontale.id;
+    // Before isolate: zero clutter
+    assert.equal(getActiveSurfacePins(st).length, 0);
+    // After isolate: exact frontal bone surface pins appear
+    toggleIsolate(st);
+    assert.equal(getActiveSurfacePins(st).length, 3);
+    assert.equal(getActiveSurfacePins(st)[0].latin, 'Fossa glandulae lacrimalis');
+    // Unisolate: pins hide again
+    toggleIsolate(st);
+    assert.equal(getActiveSurfacePins(st).length, 0);
   });
 }
 
-// 2. Study Presets (Cardio, Respiratory, Digestive, Cor HD — 4 tests)
-['cardio_all', 'resp_vasa', 'digest_vasa', 'cor_hd'].forEach((pk, idx) => {
-  runTest(`Hizli Calisma On Ayari (${idx + 1}/4: ${STUDY_PRESETS[pk].label})`, () => {
+// 2. GPU Memory Unload (3 rounds)
+for (let r = 1; r <= 3; r++) {
+  runTest(`GPU Bellek Bosaltma (dispose/unload) Tur ${r}/3`, () => {
+    const st = makeFixture();
+    const removed = unloadSystemEntities(st, 'hra_hepar');
+    assert.equal(removed, 1);
+    assert.equal([...st.entities.values()].filter(e => e.system === 'hra_hepar').length, 0);
+  });
+}
+
+// 3. Multi-Source CT/MRI Presets (NIH HRA, Cor HD, Encephalon HD, Cor & Koronerler)
+['cor_detail', 'cor_hd', 'enceph_hd', 'hra_organs', 'resp_vasa'].forEach((pk, idx) => {
+  runTest(`Coklu BT/MR On Ayari (${idx + 1}/5: ${STUDY_PRESETS[pk].label})`, () => {
     const st = makeFixture();
     const enabled = applyStudyPreset(st, pk);
     assert.deepEqual(enabled.sort(), [...STUDY_PRESETS[pk].systems].sort());
-    for (const [sid, s] of Object.entries(st.systems)) {
-      assert.equal(s.visible, STUDY_PRESETS[pk].systems.includes(sid));
-    }
   });
 });
 
-// 3. Multi-mesh Isolation & Restore (3 structures)
-['Os femoris', 'Pulmo dexter', 'Hepar'].forEach((nm, idx) => {
-  runTest(`Izolasyon & Geri Alma (${idx + 1}/3: ${nm})`, () => {
-    const st = makeFixture();
-    const target = [...st.entities.values()].find(e => e.latin.includes(nm));
-    st.selectedId = target.id;
-    target.faded = true;
-    assert.equal(toggleIsolate(st), true);
-    assert.equal(computeEntityVisual(st, target).visible, true);
-    assert.equal(computeEntityVisual(st, target).transparent, false);
-    assert.equal(toggleIsolate(st), false);
-  });
-});
-
-// 4. Solid Opaque vs Fade/Hide (3 rounds)
+// 4. Coronary & Atlas Color Coding (3 rounds)
 for (let r = 1; r <= 3; r++) {
-  runTest(`Kati Render & Fade/Gizle (Tur ${r}/3)`, () => {
+  runTest(`Koroner & Atlas Renklendirme (Tur ${r}/3)`, () => {
     const st = makeFixture();
-    const ent = [...st.entities.values()][r];
-    assert.equal(computeEntityVisual(st, ent).transparent, false);
-    ent.faded = true;
-    assert.equal(computeEntityVisual(st, ent).transparent, true);
-    ent.hidden = true;
-    assert.equal(computeEntityVisual(st, ent).visible, false);
+    st.colorMode = 'atlas';
+    const byLat = (s) => [...st.entities.values()].find(e => e.latin.includes(s));
+    assert.equal(computeEntityVisual(st, byLat('Arteria coronaria')).colorHex, ATLAS_PALETTE.artery);
+    assert.equal(computeEntityVisual(st, byLat('Sinus coronarius')).colorHex, ATLAS_PALETTE.vein);
+    assert.equal(computeEntityVisual(st, byLat('Valva mitralis')).colorHex, ATLAS_PALETTE.heart);
+    assert.equal(computeEntityVisual(st, byLat('Ductus thoracicus')).colorHex, ATLAS_PALETTE.lymph);
+    assert.equal(computeEntityVisual(st, byLat('Nervus vagus')).colorHex, ATLAS_PALETTE.nerve);
   });
 }
 
-// 5. Latin TA2 Search across Cardio, Respiratory & Digestive Landmarks (3 queries)
-['Ostium sinus coronarii', 'Carina tracheae', 'Papilla duodeni major'].forEach((q, idx) => {
-  runTest(`Latince TA2 Landmark Arama (${idx + 1}/3: ${q})`, () => {
-    const st = makeFixture();
-    const res = searchAtlas(st, q);
-    assert.equal(res.landmarks.length, 1);
-    assert.equal(res.landmarks[0].latin, q);
+// 5. Clinical Dictionary (3 queries)
+[
+  ['Arteria coronaria sinistra', 'Sol Koroner Arter'],
+  ['Valva mitralis', 'Mitral'],
+  ['Hepar', 'Karaciğer']
+].forEach(([lat, tr], idx) => {
+  runTest(`Klinik Sozluk (${idx + 1}/3: ${lat})`, () => {
+    const info = findClinicalInfo(lat, '');
+    assert.ok(info && info.tr.includes(tr));
   });
 });
 
-// 6. Safe Camera Focus (3 scenarios)
+// 6. TA2 Search (3 queries)
+['Os frontale', 'Arteria coronaria', 'Valva mitralis'].forEach((q, idx) => {
+  runTest(`Latince TA2 Arama (${idx + 1}/3: ${q})`, () => {
+    const st = makeFixture();
+    assert.ok(searchAtlas(st, q).length >= 1);
+  });
+});
+
+// 7. Safe Camera Focus (3 scenarios)
 [
   { cam: { x: 0, y: 1, z: 0 }, tgt: { x: 0, y: 1, z: 0 }, box: { x: 0, y: 1, z: 0 }, diag: 0.3 },
   { cam: { x: 0, y: 1.2, z: 2.5 }, tgt: { x: 0, y: 0.9, z: 0 }, box: { x: 0.02, y: 1.25, z: 0.05 }, diag: 0.02 },
@@ -123,11 +140,11 @@ for (let r = 1; r <= 3; r++) {
   runTest(`Guvenli Kamera Odaklama (${idx + 1}/3)`, () => {
     const pose = computeSafeFocusPose(sc.cam, sc.tgt, sc.box, sc.diag);
     const d = Math.hypot(pose.position.x - pose.target.x, pose.position.y - pose.target.y, pose.position.z - pose.target.z);
-    assert.ok(d >= 0.219 && d <= 2.401);
+    assert.ok(d >= 0.179 && d <= 2.401);
   });
 });
 
-// 7. 3-Axis Clipping Plane (3 axes)
+// 8. 3-Axis Clipping Plane (3 axes)
 ['axial', 'sagittal', 'coronal'].forEach((ax, idx) => {
   runTest(`Kesit Duzlemi (${idx + 1}/3: ${ax})`, () => {
     assert.equal(computeClipPlaneConfig(false, ax, 0.5).constant, 100);

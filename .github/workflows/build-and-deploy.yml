@@ -1,4 +1,4 @@
-name: Build Verified Offline Android APK (Cardio + Respiratory + Digestive + Cor HD)
+name: Build Multi-Source CT/MRI Offline Android APK (NIH HRA + CAHID + Brain + Z-Anatomy)
 
 on:
   push:
@@ -15,12 +15,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Restore cached Z-Anatomy + Cor HD + Encephalon HD models
+      - name: Restore cached Multi-Source CT/MRI + Z-Anatomy models
         id: cache-models
         uses: actions/cache@v4
         with:
           path: public/models
-          key: z-anatomy-glb-v9-clean-${{ hashFiles('scripts/export_z_anatomy.py') }}
+          key: multi-ct-mri-v11-${{ hashFiles('scripts/export_z_anatomy.py', 'scripts/assemble_hybrid_ct.py', 'custom_models/**') }}
 
       - name: Install Blender (Headless)
         if: steps.cache-models.outputs.cache-hit != 'true'
@@ -28,85 +28,44 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y blender python3-numpy unzip git curl
 
-      - name: Export Z-Anatomy split layers + Cor HD (Dundee CAHID) + Encephalon HD
+      - name: Export Z-Anatomy & fetch all CT/MRI open-source datasets
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
           mkdir -p assets_source public/models
+
+          # 1. Z-Anatomy (full dissectible body + surface-snapped osteology pins)
           git clone --depth 1 https://github.com/Z-Anatomy/Models-of-human-anatomy.git assets_source/repo
           unzip -q assets_source/repo/Z-Anatomy.zip -d assets_source/extracted
           BLEND_FILE=$(find assets_source/extracted -name "*.blend" | head -n 1)
           cp assets_source/repo/TA2.csv assets_source/TA2.csv
           blender -b "$BLEND_FILE" --python-exit-code 1 -P scripts/export_z_anatomy.py -- --ta2 assets_source/TA2.csv --out public/models
 
-          # High-Detail Interior Heart (University of Dundee CAHID via karansuraj/pvc-heart-tool)
-          if git clone --depth 1 https://github.com/karansuraj/pvc-heart-tool.git assets_source/heart_hd; then
-            HEART_GLB=$(find assets_source/heart_hd -name "*.glb" | head -n 1)
-            if [ -n "$HEART_GLB" ] && [ -f "$HEART_GLB" ]; then
-              cp "$HEART_GLB" public/models/cor_hd.glb
-              python3 - << 'PY'
-          import json, os
-          p = "public/models/manifest.json"
-          m = json.load(open(p, encoding="utf-8"))
-          sz = round(os.path.getsize("public/models/cor_hd.glb") / (1024 * 1024), 2)
-          m["systems"].insert(0, {
-            "id": "cor_hd",
-            "name": "Cor HD — Interior (Dundee CAHID)",
-            "tr": "Yüksek Detaylı İç Kalp & Kapakçıklar",
-            "color": "#b91c1c",
-            "defaultVisible": False,
-            "defaultOpacity": 1.0,
-            "standalone": True,
-            "file": "models/cor_hd.glb",
-            "meshCount": 1,
-            "sizeMB": sz
-          })
-          json.dump(m, open(p, "w", encoding="utf-8"), ensure_ascii=False)
-          print("Added Cor HD Interior Heart module:", sz, "MB")
-          PY
-            fi
-          fi
+          # 2. NIH HuBMAP HRA (Visible Human Project — 1mm CT & 0.33mm Cryo-section GLB organs)
+          git clone --depth 1 https://github.com/hubmapconsortium/ccf-3d-reference-object-library.git assets_source/hubmap_hra || true
 
-          # High-Detail Neuroanatomy (itayinbarr/brainproject)
-          if git clone --depth 1 https://github.com/itayinbarr/brainproject.git assets_source/brainproject; then
-            BRAIN_GLB=$(find assets_source/brainproject -name "brain.glb" | head -n 1)
-            if [ -n "$BRAIN_GLB" ] && [ -f "$BRAIN_GLB" ]; then
-              cp "$BRAIN_GLB" public/models/encephalon_hd.glb
-              python3 - << 'PY'
-          import json, os
-          p = "public/models/manifest.json"
-          m = json.load(open(p, encoding="utf-8"))
-          sz = round(os.path.getsize("public/models/encephalon_hd.glb") / (1024 * 1024), 2)
-          m["systems"].append({
-            "id": "encephalon_hd",
-            "name": "Encephalon HD (Neuroanatomia)",
-            "tr": "Yüksek Detaylı Beyin & Çekirdekler",
-            "color": "#e2b8ac",
-            "defaultVisible": False,
-            "defaultOpacity": 1.0,
-            "standalone": True,
-            "file": "models/encephalon_hd.glb",
-            "meshCount": 250,
-            "sizeMB": sz
-          })
-          json.dump(m, open(p, "w", encoding="utf-8"), ensure_ascii=False)
-          print("Added Encephalon HD module:", sz, "MB")
-          PY
-            fi
-          fi
+          # 3. Dundee CAHID Interior Heart (BT/MR)
+          git clone --depth 1 https://github.com/karansuraj/pvc-heart-tool.git assets_source/heart_hd || true
+
+          # 4. Brainproject Neuroanatomy (MR + MNI Atlas)
+          git clone --depth 1 https://github.com/itayinbarr/brainproject.git assets_source/brainproject || true
+
+          # 5. Dental Scope (Craniofacial Jaws, Sinuses & Trigeminal)
+          git clone --depth 1 https://github.com/Yoosseph/dental-scope.git assets_source/dental_scope || true
+
+          # Assemble all CT/MRI + custom_models/*.glb into manifest.json
+          python3 scripts/assemble_hybrid_ct.py
           ls -lh public/models
 
-      - name: Verify split cardio/respiratory/digestive export integrity
+      - name: Verify multi-source anatomical integrity
         run: |
           python3 - << 'PY'
           import json
           m = json.load(open("public/models/manifest.json", encoding="utf-8"))
-          l = json.load(open("public/models/landmarks.json", encoding="utf-8"))
           sys_ids = {s["id"]: s["meshCount"] for s in m["systems"]}
           assert m["totalStructures"] >= 2000, f"Yetersiz yapi: {m['totalStructures']}"
-          assert len(l) >= 500, f"Yetersiz landmark: {len(l)}"
-          for req in ("arteriae", "venae", "respiratory", "digestive"):
+          for req in ("cor_detail", "arteriae", "venae", "respiratory", "digestive"):
               assert req in sys_ids and sys_ids[req] > 0, f"Eksik sistem katmani: {req}"
-          print("VERIFIED LAYERS:", sys_ids, "Landmarks:", len(l))
+          print("VERIFIED ALL MODULES:", list(sys_ids.keys()), "Total Z-Anatomy:", m["totalStructures"], "SnappedPins:", m.get("snappedPins", 0))
           PY
 
       - name: Upload models artifact for build jobs
@@ -204,6 +163,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-apk
-          name: Atlas Anatomicus 3D (Cor HD + Respiratorium + Digestorium APK)
+          name: Atlas Anatomicus 3D (Çoklu BT/MR Harmanlanmış APK)
           files: release-apk/Anatomi3D-Atlas.apk
           make_latest: true

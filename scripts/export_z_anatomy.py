@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import bpy
+from mathutils import Vector
 
 argv = sys.argv
 argv = argv[argv.index("--") + 1:] if "--" in argv else []
@@ -25,7 +26,7 @@ def _unhide_cols(lc):
 
 _unhide_cols(bpy.context.view_layer.layer_collection)
 
-# 1. Robust TA2.csv parser
+# 1. Robust TA2.csv Latin parser
 ta2_lookup = {}
 if os.path.exists(ta2_path):
     with open(ta2_path, "r", encoding="utf-8", errors="replace") as f:
@@ -57,42 +58,43 @@ if os.path.exists(ta2_path):
                     if k and k not in ta2_lookup:
                         ta2_lookup[k] = entry
 
-# Strict helper / plane / cutter / MRI slice exclusion rules
 HELPER_COL_KEYWORDS = (
     "cross-section", "cross section", "mri", "slice", "cutter",
     "boolean", "helper", "reference", "gizmo", "interface", "background",
     "labels", "annotations", "planes", "camera", "light"
 )
 HELPER_NAME_KEYWORDS = (
-    "plane", "slice", "cutter", "boolean", "box", "cube", "grid",
+    "plane", "slice", "section", "cutter", "boolean", "box", "cube", "grid",
     "mri", "gizmo", "panel", "frame", "background", "backdrop", "quad", "rect",
     "arrow", "pointer", "marker", "profile", "bevel", "camera", "light", "lamp", "empty"
 )
 
 SYSTEM_RULES = [
-    ("lymphatica",    ["lymph", "nodi ", "nodus ", "ductus thoracicus", "cisterna chyli", "spleen", "splen", "thymus", "tonsil"]),
-    ("venae",         ["vein", "vena ", "venae", "venous", "venosus", "jugular", "saphen", "cava", "azygos", "portal", "sinus coronarius", "sinus sagittalis", "sinus transversus"]),
-    ("arteriae",      ["heart", "cor ", "atrium", "ventric", "pericard", "myocard", "valva", "artery", "arteria", "arteriae", "aorta", "carotid", "coronar", "truncus pulmonalis", "subclavian", "femoral artery", "iliac artery", "cardiovascular"]),
-    ("respiratory",   ["respirat", "lung", "pulmo", "trachea", "bronch", "larynx", "laryng", "pleura", "pharynx", "nasal cavity", "alvei", "epiglott", "cricoid", "thyroid cartilage", "arytenoid"]),
-    ("digestive",     ["digest", "esophag", "oesophag", "stomach", "gaster", "gastric", "liver", "hepar", "hepat", "gallbladder", "vesica biliar", "bile", "biliar", "pancreas", "duoden", "jejun", "ileum", "colon", "cecum", "caecum", "appendix", "rectum", "intestin", "periton", "omentum", "mesenter", "salivary", "parotid", "tongue", "lingua", "tooth", "teeth", "dent"]),
-    ("urogenital",    ["urinar", "kidney", "ren ", "renal", "ureter", "bladder", "vesica urin", "urethra", "adrenal", "suprarenal", "prostate", "testis", "uterus", "ovary", "genital", "reproduct", "endocrin", "thyroid gland"]),
-    ("nervous",       ["nervous", "nerve", "nerves", "nervus", "brain", "encephal", "cerebr", "cerebell", "spinal", "plexus", "sense", "eye", "ear", "gangli", "medulla oblongata", "pons", "thalamus"]),
-    ("skeletal",      ["skeletal", "bone", "bones", "skeleton", "skull", "cranium", "vertebra", "rib", "costa", "sternum", "femur", "tibia", "fibula", "humerus", "radius", "ulna", "pelvis", "scapula", "clavic", "mandib", "maxilla", "ossa"]),
-    ("joints",        ["joint", "joints", "articular", "ligament", "cartilage", "bursa", "meniscus", "synovial", "discus", "capsule"]),
-    ("muscular",      ["muscular", "muscle", "muscles", "tendon", "aponeurosis", "fascia", "muscul", "diaphragm"])
+    ("cor_detail",  ["heart", "cor ", "atrium", "ventric", "pericard", "myocard", "endocard", "valva", "tricuspid", "mitral", "bicuspid", "semilunar", "papillar", "chordae", "trabecul", "auricul", "coronar", "interventricular", "circumflex", "cardiac vein", "sinus coronarius", "fossa ovalis", "crista terminalis", "pectinate", "aortic root", "pulmonary trunk", "truncus pulmonalis"]),
+    ("lymphatica",  ["lymph", "nodi ", "nodus ", "ductus thoracicus", "cisterna chyli", "spleen", "splen", "thymus", "tonsil"]),
+    ("venae",       ["vein", "vena ", "venae", "venous", "venosus", "jugular", "saphen", "cava", "azygos", "portal", "sinus sagittalis", "sinus transversus"]),
+    ("arteriae",    ["artery", "arteria", "arteriae", "aorta", "carotid", "subclavian", "femoral artery", "iliac artery", "brachial", "radial artery", "ulnar artery", "mesenteric", "celiac", "coeliac", "renal artery", "cardiovascular"]),
+    ("respiratory", ["respirat", "lung", "pulmo", "trachea", "bronch", "larynx", "laryng", "pleura", "pharynx", "nasal cavity", "alvei", "epiglott", "cricoid", "thyroid cartilage", "arytenoid"]),
+    ("digestive",   ["digest", "esophag", "oesophag", "stomach", "gaster", "gastric", "liver", "hepar", "hepat", "gallbladder", "vesica biliar", "bile", "biliar", "pancreas", "duoden", "jejun", "ileum", "colon", "cecum", "caecum", "appendix", "rectum", "intestin", "periton", "omentum", "mesenter", "salivary", "parotid", "tongue", "lingua", "tooth", "teeth", "dent"]),
+    ("urogenital",  ["urinar", "kidney", "ren ", "renal", "ureter", "bladder", "vesica urin", "urethra", "adrenal", "suprarenal", "prostate", "testis", "uterus", "ovary", "genital", "reproduct", "endocrin", "thyroid gland"]),
+    ("nervous",     ["nervous", "nerve", "nerves", "nervus", "brain", "encephal", "cerebr", "cerebell", "spinal", "plexus", "sense", "eye", "ear", "gangli", "medulla oblongata", "pons", "thalamus"]),
+    ("skeletal",    ["skeletal", "bone", "bones", "skeleton", "skull", "cranium", "vertebra", "rib", "costa", "sternum", "femur", "tibia", "fibula", "humerus", "radius", "ulna", "pelvis", "scapula", "clavic", "mandib", "maxilla", "ossa", "frontal", "parietal", "temporal", "occipital", "sphenoid", "ethmoid"]),
+    ("joints",      ["joint", "joints", "articular", "ligament", "cartilage", "bursa", "meniscus", "synovial", "discus", "capsule"]),
+    ("muscular",    ["muscular", "muscle", "muscles", "tendon", "aponeurosis", "fascia", "muscul", "diaphragm"])
 ]
 
 SYSTEM_META = {
-    "arteriae":    {"name": "Cor et Arteriae",       "tr": "Kalp ve Arteriyel Ağaç", "color": "#d92626", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "venae":       {"name": "Venae",                 "tr": "Venöz Sistem",           "color": "#1d4ed8", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "lymphatica":  {"name": "Systema lymphoideum",   "tr": "Lenfatik Sistem",        "color": "#16a34a", "defaultVisible": False, "defaultOpacity": 1.0},
-    "respiratory": {"name": "Systema respiratorium", "tr": "Solunum Sistemi",        "color": "#d9778b", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "digestive":   {"name": "Systema digestorium",   "tr": "Sindirim Sistemi",       "color": "#c97a4b", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "urogenital":  {"name": "Systema urinarium",     "tr": "Üriner ve Endokrin",     "color": "#9d4edd", "defaultVisible": False, "defaultOpacity": 1.0},
-    "skeletal":    {"name": "Systema skeletale",     "tr": "İskelet Sistemi",        "color": "#e5dac3", "defaultVisible": True,  "defaultOpacity": 0.45},
-    "joints":      {"name": "Systema articulare",    "tr": "Eklemler ve Bağlar",     "color": "#93c5fd", "defaultVisible": False, "defaultOpacity": 1.0},
-    "muscular":    {"name": "Systema musculare",     "tr": "Kas Sistemi",            "color": "#9f3535", "defaultVisible": False, "defaultOpacity": 1.0},
-    "nervous":     {"name": "Systema nervosum",      "tr": "Sinir Sistemi",          "color": "#eab308", "defaultVisible": False, "defaultOpacity": 1.0}
+    "cor_detail":  {"name": "Cor et Vasa Coronaria", "tr": "Parçalanabilir Kalp & Koronerler", "group": "zanatomy", "color": "#b91c1c", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "arteriae":    {"name": "Arteriae",              "tr": "Arteriyel Ağaç",                  "group": "zanatomy", "color": "#d92626", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "venae":       {"name": "Venae",                 "tr": "Venöz Sistem",                    "group": "zanatomy", "color": "#1d4ed8", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "lymphatica":  {"name": "Systema lymphoideum",   "tr": "Lenfatik Sistem",                 "group": "zanatomy", "color": "#16a34a", "defaultVisible": False, "defaultOpacity": 1.0},
+    "respiratory": {"name": "Systema respiratorium", "tr": "Solunum Sistemi",                 "group": "zanatomy", "color": "#d9778b", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "digestive":   {"name": "Systema digestorium",   "tr": "Sindirim Sistemi",                "group": "zanatomy", "color": "#c97a4b", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "urogenital":  {"name": "Systema urinarium",     "tr": "Üriner ve Endokrin",              "group": "zanatomy", "color": "#9d4edd", "defaultVisible": False, "defaultOpacity": 1.0},
+    "skeletal":    {"name": "Systema skeletale",     "tr": "İskelet Sistemi",                 "group": "zanatomy", "color": "#e5dac3", "defaultVisible": False, "defaultOpacity": 1.0},
+    "joints":      {"name": "Systema articulare",    "tr": "Eklemler ve Bağlar",              "group": "zanatomy", "color": "#93c5fd", "defaultVisible": False, "defaultOpacity": 1.0},
+    "muscular":    {"name": "Systema musculare",     "tr": "Kas Sistemi",                     "group": "zanatomy", "color": "#9f3535", "defaultVisible": False, "defaultOpacity": 1.0},
+    "nervous":     {"name": "Systema nervosum",      "tr": "Sinir Sistemi",                   "group": "zanatomy", "color": "#eab308", "defaultVisible": False, "defaultOpacity": 1.0}
 }
 
 def classify_object(obj):
@@ -104,11 +106,16 @@ def classify_object(obj):
     return "digestive"
 
 def classify_subtype(sys_id, name_str, region_str):
+    t = (name_str + " " + region_str).lower()
+    if sys_id == "cor_detail":
+        if any(k in t for k in ("vein", "vena", "sinus coronarius", "cardiac vein")):
+            return "vein"
+        if any(k in t for k in ("arter", "coronar", "interventricular", "circumflex", "marginal", "aort")):
+            return "artery"
+        return "heart"
     if sys_id == "lymphatica": return "lymph"
     if sys_id == "venae": return "vein"
-    if sys_id == "arteriae":
-        t = (name_str + " " + region_str).lower()
-        return "heart" if any(k in t for k in ("heart", "cor ", "atrium", "ventric", "myocard", "pericard", "valva")) else "artery"
+    if sys_id == "arteriae": return "artery"
     if sys_id == "nervous": return "nerve"
     if sys_id == "joints": return "ligament"
     if sys_id == "muscular": return "muscle"
@@ -118,12 +125,9 @@ def classify_subtype(sys_id, name_str, region_str):
 def is_flat_plane_or_box(obj):
     if obj.type != "MESH":
         return False
-    verts = len(obj.data.vertices)
-    polys = len(obj.data.polygons)
-    if verts < 12 or polys < 6:
+    if len(obj.data.vertices) < 12 or len(obj.data.polygons) < 6:
         return True
     dims = sorted([abs(d) for d in obj.dimensions])
-    # Flat 2D rectangle/plane sheet (thickness ~0 while wide)
     if dims[0] < 0.0005 and dims[1] > 0.04 and dims[2] > 0.04:
         return True
     return False
@@ -154,24 +158,26 @@ def clean_name(raw_name):
     elif name.endswith(".l") or name.endswith("_l"):
         side = " (Sinister)"; name = name[:-2]
     name = re.sub(r"\.\d{3}$", "", name)
+    name = re.sub(r"_\d+$", "", name)
     name = name.replace("_", " ").strip()
     return (name + side).strip(), name.strip()
 
+def canonical_key(sys_id, latin):
+    base = re.sub(r"(_\d+|\.\d{3})$", "", (latin or "")).strip().lower()
+    return f"{sys_id}::{base}"
+
 by_system = {k: [] for k in SYSTEM_META.keys()}
 manifest_structures = []
-landmarks = []
-seen_landmarks = set()
+raw_labels = []
 skipped_helpers = 0
 
 for obj in bpy.context.view_layer.objects:
     col_list = [c.name for c in obj.users_collection if c.name != "Scene Collection"]
     col_names_lower = " ".join(c.lower() for c in col_list)
-    region_str = " > ".join(col_list) if col_list else "Corpus"
+    region_str = col_list[0] if col_list else "Corpus"
     lower_n = obj.name.lower()
 
-    # 1. Capture 3D anatomical landmarks (Labels / Text / Empties)
-    is_label_obj = obj.type in ("FONT", "EMPTY") or "label" in lower_n or lower_n.startswith("text")
-    if is_label_obj:
+    if obj.type in ("FONT", "EMPTY") or "label" in lower_n or lower_n.startswith("text"):
         raw_txt = obj.name
         if obj.type == "FONT":
             try:
@@ -182,37 +188,16 @@ for obj in bpy.context.view_layer.objects:
                 raw_txt = obj.name
         disp, base = clean_name(raw_txt)
         if len(base) >= 3 and not any(k in base.lower() for k in ("camera", "light", "lamp", "line", "arrow", "plane", "slice", "cutter", "box")):
-            sys_id = classify_object(obj) or "skeletal"
-            loc = obj.matrix_world.translation
-            pos = [round(float(loc.x), 4), round(float(loc.z), 4), round(float(-loc.y), 4)]
-            dedup = (disp.lower(), round(pos[0], 2), round(pos[1], 2), round(pos[2], 2))
-            if dedup not in seen_landmarks:
-                seen_landmarks.add(dedup)
-                key = re.sub(r"[^a-z0-9]", "", base.lower())
-                ta2_info = ta2_lookup.get(key, {})
-                landmarks.append({
-                    "latin": ta2_info.get("latin", disp),
-                    "name": disp,
-                    "ta2": ta2_info.get("ta2Code", ""),
-                    "system": sys_id,
-                    "region": region_str,
-                    "pos": pos
-                })
+            raw_labels.append((obj, disp, base, classify_object(obj)))
         continue
 
     if obj.type not in ("MESH", "CURVE", "SURFACE"):
         continue
-
-    # 2. Strictly reject planes, cutter boxes, regions, MRI slices, profile curves
     if is_helper_object(obj, col_names_lower):
         skipped_helpers += 1
         continue
 
     sys_id = classify_object(obj)
-    if not sys_id:
-        skipped_helpers += 1
-        continue
-
     disp, base = clean_name(obj.name)
     key = re.sub(r"[^a-z0-9]", "", base.lower())
     ta2_info = ta2_lookup.get(key, {})
@@ -236,6 +221,53 @@ for obj in bpy.context.view_layer.objects:
         "subtype": subtype,
         "region": region_str
     })
+
+# 2. Snap osteology & organ labels directly onto nearest real mesh surface (closest_point_on_mesh)
+surface_pins = {}  # entityKey -> [ { latin, pos: [x,y,z] } ]
+mesh_centers = {}
+for sys_id in ("skeletal", "cor_detail", "respiratory", "digestive"):
+    centers = []
+    for o in by_system[sys_id]:
+        if o.type == "MESH" and len(o.data.vertices) >= 12:
+            c = o.matrix_world @ (sum((Vector(b) for b in o.bound_box), Vector()) / 8.0)
+            centers.append((o, c))
+    mesh_centers[sys_id] = centers
+
+snapped_count = 0
+for lbl_obj, disp, base, sys_id in raw_labels:
+    if sys_id not in mesh_centers or not mesh_centers[sys_id]:
+        continue
+    wloc = lbl_obj.matrix_world.translation
+    # Find top 3 nearest meshes by bounding-box center, then exact surface point
+    cands = sorted(mesh_centers[sys_id], key=lambda item: (item[1] - wloc).length)[:3]
+    best_dist = 1e9
+    best_pt = None
+    best_owner = None
+    for m_obj, _ in cands:
+        try:
+            inv = m_obj.matrix_world.inverted()
+            ok, loc_pt, _, _ = m_obj.closest_point_on_mesh(inv @ wloc)
+            if ok:
+                world_pt = m_obj.matrix_world @ loc_pt
+                d = (world_pt - wloc).length
+                if d < best_dist:
+                    best_dist = d
+                    best_pt = world_pt
+                    best_owner = m_obj
+        except Exception:
+            pass
+    if best_owner and best_pt and best_dist < 0.25:
+        ekey = canonical_key(sys_id, best_owner.get("anat_latin", best_owner.name))
+        k = re.sub(r"[^a-z0-9]", "", base.lower())
+        ta2_info = ta2_lookup.get(k, {})
+        lat = ta2_info.get("latin", disp)
+        arr = surface_pins.setdefault(ekey, [])
+        if not any(x["latin"].lower() == lat.lower() for x in arr) and len(arr) < 18:
+            arr.append({
+                "latin": lat,
+                "pos": [round(float(best_pt.x), 4), round(float(best_pt.z), 4), round(float(-best_pt.y), 4)]
+            })
+            snapped_count += 1
 
 exported_systems = []
 for sys_id, objs in by_system.items():
@@ -294,16 +326,16 @@ for sys_id, objs in by_system.items():
 
 with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as mf:
     json.dump({
-        "source": "Z-Anatomy / BodyParts3D (DBCLS)",
-        "license": "CC BY-SA 4.0",
+        "source": "Z-Anatomy / BodyParts3D + NIH HuBMAP HRA + Dundee CAHID + Brainproject",
+        "license": "CC BY-SA 4.0 / CC BY 4.0",
         "totalStructures": len(manifest_structures),
-        "totalLandmarks": len(landmarks),
+        "snappedPins": snapped_count,
         "skippedHelpers": skipped_helpers,
         "systems": exported_systems,
         "structures": manifest_structures
     }, mf, ensure_ascii=False)
 
-with open(os.path.join(out_dir, "landmarks.json"), "w", encoding="utf-8") as lf:
-    json.dump(landmarks, lf, ensure_ascii=False)
+with open(os.path.join(out_dir, "surface_pins.json"), "w", encoding="utf-8") as pf:
+    json.dump(surface_pins, pf, ensure_ascii=False)
 
-print(f"[Z-Anatomy Export] Done. CleanMeshes={len(manifest_structures)}, Landmarks={len(landmarks)}, SkippedHelpers={skipped_helpers}")
+print(f"[Z-Anatomy Export] Done. CleanMeshes={len(manifest_structures)}, SnappedPins={snapped_count}, SkippedHelpers={skipped_helpers}")

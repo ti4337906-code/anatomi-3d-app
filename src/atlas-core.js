@@ -1,38 +1,42 @@
-// Saf, test edilebilir anatomi cekirdek motoru (gruplama, renk modu, izolasyon, arama, preset, kamera)
-
 export const ATLAS_PALETTE = {
-  artery:   0xd92626, // Parlak arteriyel kirmizi
-  vein:     0x1d4ed8, // Koyu venoz mavi
-  lymph:    0x16a34a, // Zumrut lenfatik yesil
-  nerve:    0xeab308, // Parlak sinir sarisi
-  heart:    0xb91c1c, // Miyokard kirmizisi
-  ligament: 0x93c5fd, // Bag ve kikirdak buz mavisi
-  muscle:   0x9f3535, // Cizgili kas tonu
-  bone:     0xe5dac3, // Fildisi kemik tonu
-  viscera:  0xc27b60  // Ic organ dogal tonu
+  artery:   0xd92626,
+  vein:     0x1d4ed8,
+  lymph:    0x16a34a,
+  nerve:    0xeab308,
+  heart:    0xb91c1c,
+  ligament: 0x93c5fd,
+  muscle:   0x9f3535,
+  bone:     0xe5dac3,
+  viscera:  0xc27b60
 };
 
 export const STUDY_PRESETS = {
-  cardio_all:  { label: 'Cor + Vasa',      systems: ['arteriae', 'venae', 'lymphatica'] },
-  resp_vasa:   { label: 'Respiratorium',   systems: ['respiratory', 'arteriae', 'venae'] },
-  digest_vasa: { label: 'Digestorium',     systems: ['digestive', 'arteriae', 'venae'] },
-  cor_hd:      { label: 'Cor HD (İç Kalp)', systems: ['cor_hd'] },
-  skeletal:    { label: 'Skeletale',       systems: ['skeletal', 'joints'] }
+  cor_detail:  { label: 'Cor & Koronerler',    systems: ['cor_detail'] },
+  cor_hd:      { label: 'Cor HD (BT/MR İç)',   systems: ['cor_hd'] },
+  enceph_hd:   { label: 'Encephalon HD (MR)',  systems: ['encephalon_hd'] },
+  hra_organs:  { label: 'NIH BT Organlar',     systems: ['hra_cor', 'hra_pulmo', 'hra_hepar', 'hra_pancreas', 'hra_colon'] },
+  resp_vasa:   { label: 'Respiratorium + Vasa', systems: ['respiratory', 'cor_detail', 'arteriae', 'venae'] },
+  digest_vasa: { label: 'Digestorium + Vasa',  systems: ['digestive', 'arteriae', 'venae'] }
 };
 
 export function inferSubtype(sysId, latin = '', name = '', region = '') {
+  const txt = `${latin} ${name} ${region}`.toLowerCase();
+  if (sysId === 'cor_detail') {
+    if (/(vein|vena |venae|sinus coronarius|cardiac vein)/.test(txt)) return 'vein';
+    if (/(artery|arteria|coronar|interventricular|circumflex|marginal|aort)/.test(txt)) return 'artery';
+    return 'heart';
+  }
+  if (sysId === 'cor_hd' || sysId === 'hra_cor') return 'heart';
+  if (sysId === 'encephalon_hd') return 'nerve';
   if (sysId === 'lymphatica') return 'lymph';
   if (sysId === 'venae') return 'vein';
-  if (sysId === 'cor_hd') return 'heart';
-  const txt = `${latin} ${name} ${region}`.toLowerCase();
   if (/(lymph|nodi |nodus |ductus thoracicus|cisterna chyli|spleen|thymus)/.test(txt)) return 'lymph';
-  if (/(vein|vena |venae|venous|venosus|sinus |jugular|saphen|cava)/.test(txt)) return 'vein';
-  if (/(heart|\bcor\b|atrium|ventric|myocard|pericard|valva)/.test(txt)) return 'heart';
-  if (sysId === 'arteriae' || /(artery|arteria|arteriae|aorta|carotid|coronar|truncus pulmonalis|arterios)/.test(txt)) return 'artery';
+  if (/(vein|vena |venae|venous|venosus|jugular|saphen|cava)/.test(txt)) return 'vein';
+  if (sysId === 'arteriae' || sysId === 'hra_vasa' || /(artery|arteria|arteriae|aorta|carotid|coronar|truncus pulmonalis)/.test(txt)) return 'artery';
   if (sysId === 'nervous' || /(nerve|nervus|plexus|gangli|brain|cerebr|cerebell|spinal)/.test(txt)) return 'nerve';
   if (sysId === 'joints' || /(ligament|cartilag|menisc|discus|bursa|capsul)/.test(txt)) return 'ligament';
   if (sysId === 'muscular') return 'muscle';
-  if (sysId === 'skeletal') return 'bone';
+  if (sysId === 'skeletal' || sysId === 'hra_pelvis' || sysId.startsWith('dental_')) return 'bone';
   return 'viscera';
 }
 
@@ -45,15 +49,34 @@ export function createAtlasState() {
   return {
     systems: {},
     entities: new Map(),
-    landmarks: [],
+    surfacePins: {},   // entityKey -> [{ latin, pos }]
     selectedId: null,
-    activeLandmark: null,
     isolateMode: false,
     colorMode: 'natural',
     sliceEnabled: false,
     sliceAxis: 'axial',
     sliceValue: 1.9
   };
+}
+
+export function unloadSystemEntities(state, sysId) {
+  let removed = 0;
+  for (const [key, ent] of state.entities.entries()) {
+    if (ent.system === sysId) {
+      if (state.selectedId === key) {
+        state.selectedId = null;
+        state.isolateMode = false;
+      }
+      state.entities.delete(key);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+export function getActiveSurfacePins(state) {
+  if (!state.isolateMode || !state.selectedId) return [];
+  return state.surfacePins[state.selectedId] || [];
 }
 
 export function applyStudyPreset(state, presetKey) {
@@ -132,21 +155,8 @@ export function toggleIsolate(state) {
   return state.isolateMode;
 }
 
-export function searchAtlas(state, query, maxLandmarks = 40, maxEntities = 50) {
+export function searchAtlas(state, query, maxEntities = 60) {
   const q = (query || '').trim().toLowerCase();
-  const lm = [];
-  if (q.length >= 2) {
-    for (const l of state.landmarks) {
-      if (
-        (l.latin && l.latin.toLowerCase().includes(q)) ||
-        (l.name && l.name.toLowerCase().includes(q)) ||
-        (l.ta2 && l.ta2.toLowerCase().includes(q))
-      ) {
-        lm.push(l);
-        if (lm.length >= maxLandmarks) break;
-      }
-    }
-  }
   const ents = [];
   for (const e of state.entities.values()) {
     if (
@@ -159,7 +169,7 @@ export function searchAtlas(state, query, maxLandmarks = 40, maxEntities = 50) {
       if (ents.length >= maxEntities) break;
     }
   }
-  return { landmarks: lm, entities: ents };
+  return ents;
 }
 
 export function computeSafeFocusPose(camPos, targetPos, boxCenter, boxDiagonal) {
@@ -172,7 +182,7 @@ export function computeSafeFocusPose(camPos, targetPos, boxCenter, boxDiagonal) 
   } else {
     dx /= len; dy /= len; dz /= len;
   }
-  const dist = Math.max(0.22, Math.min(2.4, (boxDiagonal || 0.25) * 2.15));
+  const dist = Math.max(0.18, Math.min(2.4, (boxDiagonal || 0.25) * 2.1));
   return {
     target: { x: boxCenter.x, y: boxCenter.y, z: boxCenter.z },
     position: { x: boxCenter.x + dx * dist, y: boxCenter.y + dy * dist, z: boxCenter.z + dz * dist },

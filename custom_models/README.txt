@@ -1,0 +1,1 @@
+Bu klasöre koyacağınız tüm .glb dosyaları (örneğin NIH 3D veya Sketchfab'dan indirdiğiniz yüksek çözünürlüklü BT kafatası / kemik / organ modelleri) GitHub Actions derlemesi sırasında otomatik olarak APK içine gömülür ve uygulamanın Systemata menüsünde görünür.
