@@ -22,14 +22,11 @@ jobs:
           path: public/models
           key: z-anatomy-glb-v1-${{ hashFiles('scripts/export_z_anatomy.py') }}
 
-      - name: Install Blender 4.2 LTS (Headless)
+      - name: Install Blender (Headless)
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxrender1 libxi6 libxxf86vm1 libxfixes3 libxkbcommon0 libgl1 libsm6
-          curl -L -o blender.tar.xz https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz
-          tar -xf blender.tar.xz
-          mv blender-4.2.3-linux-x64 blender-bin
+          sudo apt-get install -y blender unzip git
 
       - name: Download Z-Anatomy official dataset & export GLB layers
         if: steps.cache-models.outputs.cache-hit != 'true'
@@ -39,7 +36,7 @@ jobs:
           unzip -q assets_source/repo/Z-Anatomy.zip -d assets_source/extracted
           BLEND_FILE=$(find assets_source/extracted -name "*.blend" | head -n 1)
           cp assets_source/repo/TA2.csv assets_source/TA2.csv
-          ./blender-bin/blender -b "$BLEND_FILE" -P scripts/export_z_anatomy.py -- --ta2 assets_source/TA2.csv --out public/models
+          blender -b "$BLEND_FILE" -P scripts/export_z_anatomy.py -- --ta2 assets_source/TA2.csv --out public/models
           ls -lh public/models
 
       - name: Upload models artifact for build jobs
