@@ -150,14 +150,23 @@ function loadSystem(sysId) {
         const root = gltf.scene;
         root.traverse(obj => {
           if (!obj.isMesh) return;
-          const m = obj.material ? obj.material.clone() : new THREE.MeshStandardMaterial({ color: st.meta.color, roughness: 0.55 });
-          // KATI (OPAQUE) baslangic — seffaflik/hayalet goruntu hatasini onler
-          m.transparent = false;
-          m.opacity = 1.0;
-          m.depthWrite = true;
-          m.side = THREE.DoubleSide;
-          m.clippingPlanes = [clipPlane];
-          m.userData.baseEmissive = m.emissive ? m.emissive.clone() : new THREE.Color(0x000000);
+          // Blender'in seffaf/transmission ayarlarini atip sadece gercek rengi alarak %100 KATI materyal olustur
+          let baseColor = new THREE.Color(st.meta.color);
+          if (obj.material && obj.material.color) {
+            baseColor.copy(obj.material.color);
+          }
+          const m = new THREE.MeshStandardMaterial({
+            color: baseColor,
+            roughness: 0.52,
+            metalness: 0.04,
+            transparent: false,
+            opacity: 1.0,
+            depthWrite: true,
+            depthTest: true,
+            side: THREE.FrontSide,
+            clippingPlanes: [clipPlane]
+          });
+          m.userData.baseEmissive = new THREE.Color(0x000000);
           obj.material = m;
 
           const ud = obj.userData || {};
@@ -356,6 +365,11 @@ document.getElementById('btnPillIsolate').addEventListener('click', (e) => {
   if (!selectedRecord) return;
   isolateMode = !isolateMode;
   e.target.classList.toggle('active', isolateMode);
+  if (isolateMode) {
+    selectedRecord.faded = false;
+    document.getElementById('btnPillFade').classList.remove('active');
+    focusRecord(selectedRecord);
+  }
   refreshMaterials();
 });
 

@@ -122,7 +122,11 @@ for obj in bpy.context.view_layer.objects:
                 })
         continue
 
-    if obj.type != "MESH" or "line" in lower_n or len(obj.data.vertices) < 3:
+    if obj.type not in ("MESH", "CURVE", "SURFACE"):
+        continue
+    if "line" in lower_n and not any(k in lower_n for k in ("arter", "vein", "vena", "nerv", "aorta", "trunk", "plexus", "branch", "ramus")):
+        continue
+    if obj.type == "MESH" and len(obj.data.vertices) < 3:
         continue
 
     disp, base = clean_name(obj.name)
@@ -149,9 +153,23 @@ exported_systems = []
 for sys_id, objs in by_system.items():
     if not objs:
         continue
+    # Convert CURVE/SURFACE (arteries, veins, nerves) to MESH before glTF export
+    curves = [o for o in objs if o.type in ("CURVE", "SURFACE") and o.name in bpy.context.view_layer.objects]
+    if curves:
+        bpy.ops.object.select_all(action="DESELECT")
+        for c in curves:
+            c.hide_set(False)
+            c.hide_viewport = False
+            c.select_set(True)
+        bpy.context.view_layer.objects.active = curves[0]
+        try:
+            bpy.ops.object.convert(target="MESH")
+        except Exception as e:
+            print(f"[Warn] Curve convert hatasi ({sys_id}):", e)
+
     bpy.ops.object.select_all(action="DESELECT")
     for o in objs:
-        if o.name not in bpy.context.view_layer.objects:
+        if o.name not in bpy.context.view_layer.objects or o.type != "MESH":
             continue
         o.hide_set(False)
         o.hide_viewport = False
