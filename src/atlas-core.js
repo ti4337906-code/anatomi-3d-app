@@ -1,4 +1,4 @@
-// Saf, test edilebilir anatomi cekirdek motoru (gruplama, renk modu, izolasyon, arama, kamera guvenligi)
+// Saf, test edilebilir anatomi cekirdek motoru (gruplama, renk modu, izolasyon, arama, preset, kamera)
 
 export const ATLAS_PALETTE = {
   artery:   0xd92626, // Parlak arteriyel kirmizi
@@ -12,12 +12,23 @@ export const ATLAS_PALETTE = {
   viscera:  0xc27b60  // Ic organ dogal tonu
 };
 
+export const STUDY_PRESETS = {
+  cardio_all:  { label: 'Cor + Vasa',      systems: ['arteriae', 'venae', 'lymphatica'] },
+  resp_vasa:   { label: 'Respiratorium',   systems: ['respiratory', 'arteriae', 'venae'] },
+  digest_vasa: { label: 'Digestorium',     systems: ['digestive', 'arteriae', 'venae'] },
+  cor_hd:      { label: 'Cor HD (İç Kalp)', systems: ['cor_hd'] },
+  skeletal:    { label: 'Skeletale',       systems: ['skeletal', 'joints'] }
+};
+
 export function inferSubtype(sysId, latin = '', name = '', region = '') {
+  if (sysId === 'lymphatica') return 'lymph';
+  if (sysId === 'venae') return 'vein';
+  if (sysId === 'cor_hd') return 'heart';
   const txt = `${latin} ${name} ${region}`.toLowerCase();
   if (/(lymph|nodi |nodus |ductus thoracicus|cisterna chyli|spleen|thymus)/.test(txt)) return 'lymph';
   if (/(vein|vena |venae|venous|venosus|sinus |jugular|saphen|cava)/.test(txt)) return 'vein';
-  if (/(artery|arteria|arteriae|aorta|carotid|coronar|truncus pulmonalis|arterios)/.test(txt)) return 'artery';
-  if (/(heart|\bcor\b|atrium|ventric|myocard|pericard)/.test(txt)) return 'heart';
+  if (/(heart|\bcor\b|atrium|ventric|myocard|pericard|valva)/.test(txt)) return 'heart';
+  if (sysId === 'arteriae' || /(artery|arteria|arteriae|aorta|carotid|coronar|truncus pulmonalis|arterios)/.test(txt)) return 'artery';
   if (sysId === 'nervous' || /(nerve|nervus|plexus|gangli|brain|cerebr|cerebell|spinal)/.test(txt)) return 'nerve';
   if (sysId === 'joints' || /(ligament|cartilag|menisc|discus|bursa|capsul)/.test(txt)) return 'ligament';
   if (sysId === 'muscular') return 'muscle';
@@ -25,7 +36,6 @@ export function inferSubtype(sysId, latin = '', name = '', region = '') {
   return 'viscera';
 }
 
-// Blender glTF coklu-materyal mesh'lerini (Femur_0, Femur_1) tek anatomik yapida birlestirir
 export function canonicalEntityKey(sysId, rawName, latin) {
   const base = (latin || rawName || '').replace(/(_\d+|\.\d{3})$/, '').trim().toLowerCase();
   return `${sysId}::${base}`;
@@ -33,17 +43,34 @@ export function canonicalEntityKey(sysId, rawName, latin) {
 
 export function createAtlasState() {
   return {
-    systems: {},         // sysId -> { visible, opacity }
-    entities: new Map(), // entityKey -> { id, latin, name, ta2, system, subtype, region, meshes: [], hidden: false, faded: false }
+    systems: {},
+    entities: new Map(),
     landmarks: [],
     selectedId: null,
     activeLandmark: null,
     isolateMode: false,
-    colorMode: 'natural', // 'natural' | 'atlas'
+    colorMode: 'natural',
     sliceEnabled: false,
     sliceAxis: 'axial',
     sliceValue: 1.9
   };
+}
+
+export function applyStudyPreset(state, presetKey) {
+  const preset = STUDY_PRESETS[presetKey];
+  if (!preset) return [];
+  state.isolateMode = false;
+  state.selectedId = null;
+  const active = [];
+  for (const sysId of Object.keys(state.systems)) {
+    const on = preset.systems.includes(sysId);
+    state.systems[sysId].visible = on;
+    if (on) {
+      state.systems[sysId].opacity = 1.0;
+      active.push(sysId);
+    }
+  }
+  return active;
 }
 
 export function registerMeshToEntity(state, meshInfo) {
@@ -135,7 +162,6 @@ export function searchAtlas(state, query, maxLandmarks = 40, maxEntities = 50) {
   return { landmarks: lm, entities: ents };
 }
 
-// Sifir-vektor korumali guvenli kamera odaklama hesaplayicisi
 export function computeSafeFocusPose(camPos, targetPos, boxCenter, boxDiagonal) {
   let dx = camPos.x - targetPos.x;
   let dy = camPos.y - targetPos.y;

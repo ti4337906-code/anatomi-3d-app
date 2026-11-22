@@ -1,4 +1,4 @@
-name: Build Verified Offline Android APK (Z-Anatomy TA2)
+name: Build Verified Offline Android APK (Cardio + Respiratory + Digestive + Cor HD)
 
 on:
   push:
@@ -15,20 +15,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Restore cached Z-Anatomy GLB models
+      - name: Restore cached Z-Anatomy + Cor HD + Encephalon HD models
         id: cache-models
         uses: actions/cache@v4
         with:
           path: public/models
-          key: z-anatomy-glb-v6-ta2-${{ hashFiles('scripts/export_z_anatomy.py') }}
+          key: z-anatomy-glb-v8-viscera-corhd-${{ hashFiles('scripts/export_z_anatomy.py') }}
 
       - name: Install Blender (Headless)
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y blender python3-numpy unzip git
+          sudo apt-get install -y blender python3-numpy unzip git curl
 
-      - name: Download Z-Anatomy official dataset & export GLB + TA2 landmarks
+      - name: Export Z-Anatomy split layers + Cor HD (Dundee CAHID) + Encephalon HD
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
           mkdir -p assets_source public/models
@@ -37,19 +37,76 @@ jobs:
           BLEND_FILE=$(find assets_source/extracted -name "*.blend" | head -n 1)
           cp assets_source/repo/TA2.csv assets_source/TA2.csv
           blender -b "$BLEND_FILE" --python-exit-code 1 -P scripts/export_z_anatomy.py -- --ta2 assets_source/TA2.csv --out public/models
+
+          # High-Detail Interior Heart (University of Dundee CAHID via karansuraj/pvc-heart-tool)
+          if git clone --depth 1 https://github.com/karansuraj/pvc-heart-tool.git assets_source/heart_hd; then
+            HEART_GLB=$(find assets_source/heart_hd -name "*.glb" | head -n 1)
+            if [ -n "$HEART_GLB" ] && [ -f "$HEART_GLB" ]; then
+              cp "$HEART_GLB" public/models/cor_hd.glb
+              python3 - << 'PY'
+          import json, os
+          p = "public/models/manifest.json"
+          m = json.load(open(p, encoding="utf-8"))
+          sz = round(os.path.getsize("public/models/cor_hd.glb") / (1024 * 1024), 2)
+          m["systems"].insert(0, {
+            "id": "cor_hd",
+            "name": "Cor HD — Interior (Dundee CAHID)",
+            "tr": "Yüksek Detaylı İç Kalp & Kapakçıklar",
+            "color": "#b91c1c",
+            "defaultVisible": False,
+            "defaultOpacity": 1.0,
+            "standalone": True,
+            "file": "models/cor_hd.glb",
+            "meshCount": 1,
+            "sizeMB": sz
+          })
+          json.dump(m, open(p, "w", encoding="utf-8"), ensure_ascii=False)
+          print("Added Cor HD Interior Heart module:", sz, "MB")
+          PY
+            fi
+          fi
+
+          # High-Detail Neuroanatomy (itayinbarr/brainproject)
+          if git clone --depth 1 https://github.com/itayinbarr/brainproject.git assets_source/brainproject; then
+            BRAIN_GLB=$(find assets_source/brainproject -name "brain.glb" | head -n 1)
+            if [ -n "$BRAIN_GLB" ] && [ -f "$BRAIN_GLB" ]; then
+              cp "$BRAIN_GLB" public/models/encephalon_hd.glb
+              python3 - << 'PY'
+          import json, os
+          p = "public/models/manifest.json"
+          m = json.load(open(p, encoding="utf-8"))
+          sz = round(os.path.getsize("public/models/encephalon_hd.glb") / (1024 * 1024), 2)
+          m["systems"].append({
+            "id": "encephalon_hd",
+            "name": "Encephalon HD (Neuroanatomia)",
+            "tr": "Yüksek Detaylı Beyin & Çekirdekler",
+            "color": "#e2b8ac",
+            "defaultVisible": False,
+            "defaultOpacity": 1.0,
+            "standalone": True,
+            "file": "models/encephalon_hd.glb",
+            "meshCount": 250,
+            "sizeMB": sz
+          })
+          json.dump(m, open(p, "w", encoding="utf-8"), ensure_ascii=False)
+          print("Added Encephalon HD module:", sz, "MB")
+          PY
+            fi
+          fi
           ls -lh public/models
 
-      - name: Verify anatomical export integrity
+      - name: Verify split cardio/respiratory/digestive export integrity
         run: |
           python3 - << 'PY'
           import json
           m = json.load(open("public/models/manifest.json", encoding="utf-8"))
           l = json.load(open("public/models/landmarks.json", encoding="utf-8"))
-          assert m["totalStructures"] >= 2000, f"Yetersiz yapi sayisi: {m['totalStructures']}"
-          assert len(l) >= 500, f"Yetersiz landmark sayisi: {len(l)}"
-          cv = next((s for s in m["systems"] if s["id"] == "cardiovascular"), None)
-          assert cv and cv["meshCount"] >= 200, f"Damar/kalp eksik: {cv}"
-          print(f"VERIFIED: {m['totalStructures']} structures, {len(l)} landmarks, cardiovascular={cv['meshCount']}")
+          sys_ids = {s["id"]: s["meshCount"] for s in m["systems"]}
+          assert m["totalStructures"] >= 2000, f"Yetersiz yapi: {m['totalStructures']}"
+          assert len(l) >= 500, f"Yetersiz landmark: {len(l)}"
+          for req in ("arteriae", "venae", "respiratory", "digestive"):
+              assert req in sys_ids and sys_ids[req] > 0, f"Eksik sistem katmani: {req}"
+          print("VERIFIED LAYERS:", sys_ids, "Landmarks:", len(l))
           PY
 
       - name: Upload models artifact for build jobs
@@ -74,10 +131,13 @@ jobs:
       - name: Run 3x automated feature verification tests
         run: node tests/verify_all.mjs
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install dependencies & bundle offline Draco JS decoder
+        run: |
+          npm install
+          mkdir -p public/draco
+          cp -r node_modules/three/examples/jsm/libs/draco/gltf/* public/draco/
 
-      - name: Download exported Z-Anatomy models
+      - name: Download exported models
         uses: actions/download-artifact@v4
         with:
           name: z-anatomy-models
@@ -144,6 +204,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-apk
-          name: Atlas Anatomicus 3D (TA2 • Tam Çevrimdışı APK)
+          name: Atlas Anatomicus 3D (Cor HD + Respiratorium + Digestorium APK)
           files: release-apk/Anatomi3D-Atlas.apk
           make_latest: true

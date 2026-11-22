@@ -25,7 +25,7 @@ def _unhide_cols(lc):
 
 _unhide_cols(bpy.context.view_layer.layer_collection)
 
-# 1. Robust TA2.csv parser (detects delimiter and Latin/English/TA2 columns)
+# 1. Robust TA2.csv parser
 ta2_lookup = {}
 if os.path.exists(ta2_path):
     with open(ta2_path, "r", encoding="utf-8", errors="replace") as f:
@@ -40,7 +40,7 @@ if os.path.exists(ta2_path):
 
         code_idx = next((i for i, h in enumerate(header) if "ta2" in h or "code" in h or "id" in h), 0)
         lat_idx = next((i for i, h in enumerate(header) if "latin" in h), 1 if len(header) > 1 else 0)
-        eng_idx = next((i for i, h in enumerate(header) if "english" in h or "en" == h or "name" in h), 2 if len(header) > 2 else lat_idx)
+        eng_idx = next((i for i, h in enumerate(header) if "english" in h or h == "en" or "name" in h), 2 if len(header) > 2 else lat_idx)
 
         for row in reader:
             if not row or len(row) <= max(code_idx, lat_idx):
@@ -57,52 +57,53 @@ if os.path.exists(ta2_path):
                     if k and k not in ta2_lookup:
                         ta2_lookup[k] = entry
 
+# Dedicated high-granularity system classification (order matters!)
 SYSTEM_RULES = [
-    ("skeletal",       ["skeletal", "bone", "bones", "skeleton", "skull", "cranium", "vertebra", "rib", "thoracic cage", "ossa"]),
-    ("joints",         ["joint", "joints", "articular", "ligament", "cartilage", "bursa", "meniscus", "synovial"]),
-    ("muscular",       ["muscular", "muscle", "muscles", "tendon", "aponeurosis", "fascia", "muscul"]),
-    ("cardiovascular", ["cardiovascular", "heart", "artery", "arteries", "arteria", "vein", "veins", "vena", "vascular", "aorta", "lymph", "coronar", "atrium", "ventric", "sinus"]),
-    ("nervous",        ["nervous", "nerve", "nerves", "nervus", "brain", "encephal", "spinal", "plexus", "sense", "eye", "ear", "gangli"]),
-    ("visceral",       ["visceral", "viscera", "digestive", "respiratory", "urinary", "renal", "reproductive", "endocrine", "lung", "liver", "stomach", "intestine", "kidney"]),
-    ("integumentary",  ["integument", "skin", "region", "surface", "hair", "nail"])
+    ("lymphatica",    ["lymph", "nodi ", "nodus ", "ductus thoracicus", "cisterna chyli", "spleen", "splen", "thymus", "tonsil"]),
+    ("venae",         ["vein", "vena ", "venae", "venous", "venosus", "jugular", "saphen", "cava", "azygos", "portal", "sinus coronarius", "sinus sagittalis", "sinus transversus"]),
+    ("arteriae",      ["heart", "cor ", "atrium", "ventric", "pericard", "myocard", "valva", "artery", "arteria", "arteriae", "aorta", "carotid", "coronar", "truncus pulmonalis", "subclavian", "femoral artery", "iliac artery", "cardiovascular"]),
+    ("respiratory",   ["respirat", "lung", "pulmo", "trachea", "bronch", "larynx", "laryng", "pleura", "pharynx", "nasal cavity", "alvei", "epiglott", "cricoid", "thyroid cartilage", "arytenoid"]),
+    ("digestive",     ["digest", "esophag", "oesophag", "stomach", "gaster", "gastric", "liver", "hepar", "hepat", "gallbladder", "vesica biliar", "bile", "biliar", "pancreas", "duoden", "jejun", "ileum", "colon", "cecum", "caecum", "appendix", "rectum", "intestin", "periton", "omentum", "mesenter", "salivary", "parotid", "tongue", "lingua", "tooth", "teeth", "dent"]),
+    ("urogenital",    ["urinar", "kidney", "ren ", "renal", "ureter", "bladder", "vesica urin", "urethra", "adrenal", "suprarenal", "prostate", "testis", "uterus", "ovary", "genital", "reproduct", "endocrin", "thyroid gland"]),
+    ("nervous",       ["nervous", "nerve", "nerves", "nervus", "brain", "encephal", "cerebr", "cerebell", "spinal", "plexus", "sense", "eye", "ear", "gangli", "medulla oblongata", "pons", "thalamus"]),
+    ("skeletal",      ["skeletal", "bone", "bones", "skeleton", "skull", "cranium", "vertebra", "rib", "costa", "sternum", "femur", "tibia", "fibula", "humerus", "radius", "ulna", "pelvis", "scapula", "clavic", "mandib", "maxilla", "ossa"]),
+    ("joints",        ["joint", "joints", "articular", "ligament", "cartilage", "bursa", "meniscus", "synovial", "discus", "capsule"]),
+    ("muscular",      ["muscular", "muscle", "muscles", "tendon", "aponeurosis", "fascia", "muscul", "diaphragm"]),
+    ("integumentary", ["integument", "skin", "region", "surface", "hair", "nail"])
 ]
 
 SYSTEM_META = {
-    "skeletal":       {"name": "Systema skeletale",       "tr": "İskelet Sistemi",      "color": "#e5dac3", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "joints":         {"name": "Systema articulare",      "tr": "Eklemler ve Bağlar",   "color": "#93c5fd", "defaultVisible": False, "defaultOpacity": 1.0},
-    "muscular":       {"name": "Systema musculare",       "tr": "Kas Sistemi",          "color": "#9f3535", "defaultVisible": False, "defaultOpacity": 1.0},
-    "cardiovascular": {"name": "Systema cardiovasculare", "tr": "Dolaşım ve Lenfatik",  "color": "#d92626", "defaultVisible": False, "defaultOpacity": 1.0},
-    "nervous":        {"name": "Systema nervosum",        "tr": "Sinir Sistemi",        "color": "#eab308", "defaultVisible": False, "defaultOpacity": 1.0},
-    "visceral":       {"name": "Viscera",                 "tr": "İç Organlar",          "color": "#c27b60", "defaultVisible": False, "defaultOpacity": 1.0},
-    "integumentary":  {"name": "Integumentum commune",    "tr": "Dış Yüzey (Deri)",     "color": "#c9a892", "defaultVisible": False, "defaultOpacity": 0.25}
+    "arteriae":      {"name": "Cor et Arteriae",            "tr": "Kalp ve Arteriyel Ağaç",   "color": "#d92626", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "venae":         {"name": "Venae",                      "tr": "Venöz Sistem",             "color": "#1d4ed8", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "lymphatica":    {"name": "Systema lymphoideum",        "tr": "Lenfatik Sistem",          "color": "#16a34a", "defaultVisible": False, "defaultOpacity": 1.0},
+    "respiratory":   {"name": "Systema respiratorium",      "tr": "Solunum Sistemi",          "color": "#d9778b", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "digestive":     {"name": "Systema digestorium",        "tr": "Sindirim Sistemi",         "color": "#c97a4b", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "urogenital":    {"name": "Systema urinarium",          "tr": "Üriner ve Endokrin",       "color": "#9d4edd", "defaultVisible": False, "defaultOpacity": 1.0},
+    "skeletal":      {"name": "Systema skeletale",          "tr": "İskelet Sistemi",          "color": "#e5dac3", "defaultVisible": True,  "defaultOpacity": 0.45},
+    "joints":        {"name": "Systema articulare",         "tr": "Eklemler ve Bağlar",       "color": "#93c5fd", "defaultVisible": False, "defaultOpacity": 1.0},
+    "muscular":      {"name": "Systema musculare",          "tr": "Kas Sistemi",              "color": "#9f3535", "defaultVisible": False, "defaultOpacity": 1.0},
+    "nervous":       {"name": "Systema nervosum",           "tr": "Sinir Sistemi",            "color": "#eab308", "defaultVisible": False, "defaultOpacity": 1.0},
+    "integumentary": {"name": "Integumentum commune",       "tr": "Dış Yüzey (Deri)",         "color": "#c9a892", "defaultVisible": False, "defaultOpacity": 0.22}
 }
 
 def classify_object(obj):
     col_names = " ".join(c.name.lower() for c in obj.users_collection)
-    combined = col_names + " " + obj.name.lower()
+    combined = obj.name.lower() + " " + col_names
     for sys_id, keywords in SYSTEM_RULES:
         if any(kw in combined for kw in keywords):
             return sys_id
-    return "visceral"
+    return "digestive"
 
 def classify_subtype(sys_id, name_str, region_str):
-    txt = (name_str + " " + region_str).lower()
-    if any(k in txt for k in ("lymph", "nodi ", "nodus ", "ductus thoracicus", "cisterna chyli", "spleen", "thymus")):
-        return "lymph"
-    if any(k in txt for k in ("vein", "vena ", "venae", "venous", "venosus", "sinus ", "jugular", "saphen", "cava")):
-        return "vein"
-    if any(k in txt for k in ("artery", "arteria", "arteriae", "aorta", "carotid", "coronar", "truncus pulmonalis", "arterios")):
-        return "artery"
-    if any(k in txt for k in ("heart", "cor ", "atrium", "ventric", "myocard", "pericard")):
-        return "heart"
-    if sys_id == "nervous" or any(k in txt for k in ("nerve", "nervus", "plexus", "gangli", "brain", "cerebr", "cerebell", "spinal")):
-        return "nerve"
-    if sys_id == "joints" or any(k in txt for k in ("ligament", "cartilag", "menisc", "discus", "bursa", "capsul")):
-        return "ligament"
-    if sys_id == "muscular":
-        return "muscle"
-    if sys_id == "skeletal":
-        return "bone"
+    if sys_id == "lymphatica": return "lymph"
+    if sys_id == "venae": return "vein"
+    if sys_id == "arteriae":
+        t = (name_str + " " + region_str).lower()
+        return "heart" if any(k in t for k in ("heart", "cor ", "atrium", "ventric", "myocard", "pericard", "valva")) else "artery"
+    if sys_id == "nervous": return "nerve"
+    if sys_id == "joints": return "ligament"
+    if sys_id == "muscular": return "muscle"
+    if sys_id == "skeletal": return "bone"
     return "viscera"
 
 def clean_name(raw_name):
@@ -160,7 +161,7 @@ for obj in bpy.context.view_layer.objects:
 
     if obj.type not in ("MESH", "CURVE", "SURFACE"):
         continue
-    if "line" in lower_n and not any(k in lower_n for k in ("arter", "vein", "vena", "nerv", "aorta", "trunk", "plexus", "branch", "ramus", "lymph")):
+    if "line" in lower_n and not any(k in lower_n for k in ("arter", "vein", "vena", "nerv", "aorta", "trunk", "plexus", "branch", "ramus", "lymph", "bronch", "duct")):
         continue
     if obj.type == "MESH" and len(obj.data.vertices) < 3:
         continue
@@ -224,6 +225,7 @@ for sys_id, objs in by_system.items():
         export_apply=True,
         export_extras=True,
         export_yup=True,
+        export_normals=True,
         export_materials="EXPORT",
         export_draco_mesh_compression_enable=False
     )

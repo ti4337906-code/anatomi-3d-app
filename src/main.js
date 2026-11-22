@@ -1,9 +1,14 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { findClinicalNote } from './anatomy-tr.js';
+import { getMicroBumpTexture, getPBRProfile } from './pbr-textures.js';
 import {
+  STUDY_PRESETS,
   createAtlasState,
+  applyStudyPreset,
   registerMeshToEntity,
   computeEntityVisual,
   toggleIsolate,
@@ -28,31 +33,46 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPr
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(viewport.clientWidth, viewport.clientHeight);
 renderer.localClippingEnabled = true;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = 1.08;
 viewport.appendChild(renderer.domElement);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.target.set(0, 0.9, 0);
-controls.minDistance = 0.08;
+controls.minDistance = 0.06;
 controls.maxDistance = 12;
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x3b4252, 0.95));
-const keyL = new THREE.DirectionalLight(0xfffaf0, 1.15);
-keyL.position.set(4, 6, 6);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x2b303b, 0.72));
+const keyL = new THREE.DirectionalLight(0xfffaf2, 1.35);
+keyL.position.set(3.5, 5.5, 5.5);
+keyL.castShadow = true;
+keyL.shadow.mapSize.set(1024, 1024);
+keyL.shadow.bias = -0.0005;
 scene.add(keyL);
-const fillL = new THREE.DirectionalLight(0xe2e8f0, 0.55);
-fillL.position.set(-5, 2, 3);
+
+const fillL = new THREE.DirectionalLight(0xdbeafe, 0.52);
+fillL.position.set(-4.5, 2.0, 2.5);
 scene.add(fillL);
-const backL = new THREE.DirectionalLight(0xdbeafe, 0.5);
-backL.position.set(0, 4, -6);
-scene.add(backL);
+
+const rimL = new THREE.DirectionalLight(0xe2e8f0, 0.65);
+rimL.position.set(0, 4.0, -5.5);
+scene.add(rimL);
 
 const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 100);
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('./draco/');
+dracoLoader.setDecoderConfig({ type: 'js' });
 const gltfLoader = new GLTFLoader();
+gltfLoader.setDRACOLoader(dracoLoader);
+
 const modelRoot = new THREE.Group();
 scene.add(modelRoot);
 
@@ -69,7 +89,7 @@ let activeSheet = null;
 let bodyBounds = { minY: 0, maxY: 1.85, center: new THREE.Vector3(0, 0.92, 0), height: 1.85 };
 
 const landmarkMarker = new THREE.Mesh(
-  new THREE.SphereGeometry(0.008, 16, 16),
+  new THREE.SphereGeometry(0.007, 16, 16),
   new THREE.MeshBasicMaterial({ color: 0xdc2626, depthTest: false })
 );
 landmarkMarker.renderOrder = 999;
@@ -122,7 +142,7 @@ async function init() {
     if (lres.ok) state.landmarks = await lres.json();
   } catch (e) { state.landmarks = []; }
 
-  manifest.systems.forEach((sys, idx) => {
+  manifest.systems.forEach((sys) => {
     const g = new THREE.Group();
     modelRoot.add(g);
     systemMeta[sys.id] = sys;
@@ -130,14 +150,16 @@ async function init() {
     systemLoaded[sys.id] = false;
     systemLoading[sys.id] = false;
     state.systems[sys.id] = {
-      visible: sys.id === 'skeletal' || idx === 0,
+      visible: !!sys.defaultVisible,
       opacity: sys.defaultOpacity || 1.0
     };
   });
 
-  const firstSys = systemMeta.skeletal ? 'skeletal' : manifest.systems[0].id;
-  statusBar.textContent = 'Systema skeletale yükleniyor...';
-  await loadSystem(firstSys);
+  // Load default cardio + respiratory + digestive + translucent skeleton
+  const defaults = manifest.systems.filter(s => s.defaultVisible && !s.standalone);
+  for (const s of defaults) {
+    await loadSystem(s.id);
+  }
   fitCameraToModel(true);
   refreshAllVisuals();
   updateStatusBar();
@@ -159,23 +181,9 @@ function loadSystem(sysId) {
         const root = gltf.scene;
         root.traverse(obj => {
           if (!obj.isMesh) return;
-          let naturalColor = new THREE.Color(systemMeta[sysId].color);
-          if (obj.material && obj.material.color) {
-            naturalColor.copy(obj.material.color);
+          if (obj.geometry && !obj.geometry.attributes.normal) {
+            obj.geometry.computeVertexNormals();
           }
-          const mat = new THREE.MeshStandardMaterial({
-            color: naturalColor.clone(),
-            roughness: 0.52,
-            metalness: 0.04,
-            transparent: false,
-            opacity: 1.0,
-            depthWrite: true,
-            depthTest: true,
-            side: THREE.FrontSide,
-            clippingPlanes: [clipPlane]
-          });
-          mat.userData.naturalColor = naturalColor.clone();
-          obj.material = mat;
 
           const ud = obj.userData || {};
           const ent = registerMeshToEntity(state, {
@@ -188,8 +196,53 @@ function loadSystem(sysId) {
             region: ud.anat_region || systemMeta[sysId].name,
             meshRef: obj
           });
+
+          const srcMat = obj.material;
+          let naturalColor = new THREE.Color(systemMeta[sysId].color);
+          if (srcMat && srcMat.color) naturalColor.copy(srcMat.color);
+
+          const profile = getPBRProfile(ent.subtype);
+          const hasNormalMap = !!(srcMat && srcMat.normalMap);
+          const mat = new THREE.MeshStandardMaterial({
+            color: naturalColor.clone(),
+            map: (srcMat && srcMat.map) || null,
+            normalMap: hasNormalMap ? srcMat.normalMap : null,
+            roughnessMap: (srcMat && srcMat.roughnessMap) || null,
+            aoMap: (srcMat && srcMat.aoMap) || null,
+            bumpMap: hasNormalMap ? null : getMicroBumpTexture(ent.subtype),
+            bumpScale: profile.bumpScale,
+            roughness: profile.roughness,
+            metalness: profile.metalness,
+            envMapIntensity: 0.75,
+            transparent: false,
+            opacity: 1.0,
+            depthWrite: true,
+            depthTest: true,
+            side: systemMeta[sysId].standalone ? THREE.DoubleSide : THREE.FrontSide,
+            clippingPlanes: [clipPlane]
+          });
+          mat.userData.naturalColor = naturalColor.clone();
+          obj.material = mat;
+          obj.castShadow = true;
+          obj.receiveShadow = true;
+
           meshToEntity.set(obj, ent);
         });
+
+        // Standalone HD regional modules (Cor HD, Encephalon HD) normalized to inspect cleanly
+        if (systemMeta[sysId].standalone) {
+          const b = new THREE.Box3().setFromObject(root);
+          if (!b.isEmpty()) {
+            const sz = b.getSize(new THREE.Vector3());
+            const md = Math.max(sz.x, sz.y, sz.z) || 1;
+            const c = b.getCenter(new THREE.Vector3());
+            const targetSize = sysId === 'cor_hd' ? 0.55 : 0.35;
+            const sc = targetSize / md;
+            root.scale.setScalar(sc);
+            root.position.set(-c.x * sc, bodyBounds.center.y - c.y * sc, -c.z * sc);
+          }
+        }
+
         systemGroups[sysId].add(root);
         systemLoaded[sysId] = true;
         systemLoading[sysId] = false;
@@ -209,7 +262,10 @@ function loadSystem(sysId) {
 
 let scaledOnce = false;
 function fitCameraToModel(resetView = false) {
-  const box = new THREE.Box3().setFromObject(modelRoot);
+  const box = new THREE.Box3();
+  for (const [id, g] of Object.entries(systemGroups)) {
+    if (!systemMeta[id].standalone && systemLoaded[id]) box.expandByObject(g);
+  }
   if (box.isEmpty()) return;
 
   if (!scaledOnce) {
@@ -222,17 +278,34 @@ function fitCameraToModel(resetView = false) {
     scaledOnce = true;
   }
 
-  const finalBox = new THREE.Box3().setFromObject(modelRoot);
+  const finalBox = new THREE.Box3();
+  for (const [id, g] of Object.entries(systemGroups)) {
+    if (!systemMeta[id].standalone && systemLoaded[id]) finalBox.expandByObject(g);
+  }
+  if (finalBox.isEmpty()) return;
   const center = finalBox.getCenter(new THREE.Vector3());
   const size = finalBox.getSize(new THREE.Vector3());
   bodyBounds = { minY: finalBox.min.y, maxY: finalBox.max.y, center, height: size.y || 1.85 };
 
   if (resetView) {
-    const dist = Math.max(size.x, size.y, size.z) * 1.42;
-    controls.target.copy(center);
-    camera.position.set(center.x, center.y + 0.04, center.z + dist);
+    const dist = Math.max(size.x, size.y, size.z) * 1.18;
+    controls.target.set(center.x, bodyBounds.maxY - bodyBounds.height * 0.36, center.z);
+    camera.position.set(center.x, bodyBounds.maxY - bodyBounds.height * 0.34, center.z + dist * 0.72);
     controls.update();
   }
+}
+
+function focusSystemGroup(sysId) {
+  const g = systemGroups[sysId];
+  if (!g) return;
+  const box = new THREE.Box3().setFromObject(g);
+  if (box.isEmpty()) return;
+  const center = box.getCenter(new THREE.Vector3());
+  const diag = box.getSize(new THREE.Vector3()).length();
+  const pose = computeSafeFocusPose(camera.position, controls.target, center, diag);
+  controls.target.set(pose.target.x, pose.target.y, pose.target.z);
+  camera.position.set(pose.position.x, pose.position.y, pose.position.z);
+  controls.update();
 }
 
 function refreshAllVisuals() {
@@ -241,11 +314,9 @@ function refreshAllVisuals() {
     for (const mesh of ent.meshes) {
       mesh.visible = vis.visible;
       const mat = mesh.material;
-      if (vis.colorHex !== null) {
-        mat.color.setHex(vis.colorHex);
-      } else {
-        mat.color.copy(mat.userData.naturalColor);
-      }
+      if (vis.colorHex !== null) mat.color.setHex(vis.colorHex);
+      else mat.color.copy(mat.userData.naturalColor);
+
       if (mat.transparent !== vis.transparent) {
         mat.transparent = vis.transparent;
         mat.needsUpdate = true;
@@ -265,9 +336,7 @@ function refreshAllVisuals() {
 
 function getEntityBoundingBox(ent) {
   const box = new THREE.Box3();
-  for (const mesh of ent.meshes) {
-    box.expandByObject(mesh);
-  }
+  for (const mesh of ent.meshes) box.expandByObject(mesh);
   return box;
 }
 
@@ -329,9 +398,7 @@ renderer.domElement.addEventListener('pointerup', e => {
 
   const visibleMeshes = [];
   for (const ent of state.entities.values()) {
-    for (const m of ent.meshes) {
-      if (m.visible) visibleMeshes.push(m);
-    }
+    for (const m of ent.meshes) if (m.visible) visibleMeshes.push(m);
   }
   const hits = raycaster.intersectObjects(visibleMeshes, false);
   if (!hits.length) { clearSelection(); return; }
@@ -365,14 +432,13 @@ function clearSelection() {
   refreshAllVisuals();
 }
 
-// Color Mode Toggle (Doğal vs Atlas: Arter Kırmızı, Ven Mavi, Lenf Yeşil, Sinir Sarı)
 document.getElementById('btnColorMode').addEventListener('click', (e) => {
   state.colorMode = state.colorMode === 'natural' ? 'atlas' : 'natural';
   const isAtlas = state.colorMode === 'atlas';
   e.target.textContent = isAtlas ? 'Renk: Atlas' : 'Renk: Doğal';
   e.target.classList.toggle('active', isAtlas);
   refreshAllVisuals();
-  toast(isAtlas ? 'Atlas Modu: Arter Kırmızı • Ven Mavi • Lenf Yeşil • Sinir Sarı' : 'Doğal anatomik renkler aktif');
+  toast(isAtlas ? 'Atlas Modu: Arter Kırmızı • Ven Mavi • Lenf Yeşil • Sinir Sarı' : 'Doğal PBR anatomik dokular aktif');
 });
 
 document.getElementById('btnOpenDetailFromPill').addEventListener('click', () => (state.selectedId || state.activeLandmark) && openSheet('detail'));
@@ -401,7 +467,6 @@ document.getElementById('btnPillIsolate').addEventListener('click', (e) => {
   if (iso) focusEntity(ent);
 });
 
-// Bottom Sheets
 function renderSystemsSheet() {
   sheetTitle.textContent = 'Systemata Anatomica (TA2)';
   sheetBody.innerHTML = `
@@ -410,9 +475,32 @@ function renderSystemsSheet() {
       <span class="legend-item"><span class="sys-dot" style="background:#1d4ed8"></span>Venae</span>
       <span class="legend-item"><span class="sys-dot" style="background:#16a34a"></span>Lymphatica</span>
       <span class="legend-item"><span class="sys-dot" style="background:#eab308"></span>Nervi</span>
-      <span class="legend-item"><span class="sys-dot" style="background:#93c5fd"></span>Ligamenta</span>
     </div>
+    <div id="presetGrid" class="cam-grid" style="margin-bottom:10px;"></div>
   `;
+
+  const pGrid = document.getElementById('presetGrid');
+  Object.entries(STUDY_PRESETS).forEach(([key, cfg]) => {
+    if (key === 'cor_hd' && !systemMeta.cor_hd) return;
+    const b = document.createElement('button');
+    b.className = 'cam-tile';
+    b.textContent = cfg.label;
+    b.onclick = async () => {
+      const toEnable = applyStudyPreset(state, key);
+      for (const sid of toEnable) {
+        if (!systemLoaded[sid]) await loadSystem(sid);
+      }
+      refreshAllVisuals();
+      if (toEnable.length === 1 && systemMeta[toEnable[0]].standalone) {
+        focusSystemGroup(toEnable[0]);
+      } else {
+        fitCameraToModel(true);
+      }
+      renderSystemsSheet();
+      toast(`${cfg.label} yüklendi`);
+    };
+    pGrid.appendChild(b);
+  });
 
   let modCount = 0;
   for (const e of state.entities.values()) if (e.hidden || e.faded) modCount++;
@@ -456,9 +544,9 @@ function renderSystemsSheet() {
       if (st.visible && !systemLoaded[sysId]) {
         btn.textContent = 'Yükleniyor...';
         await loadSystem(sysId);
-        fitCameraToModel(false);
       }
       refreshAllVisuals();
+      if (st.visible && m.standalone) focusSystemGroup(sysId);
       renderSystemsSheet();
     };
     const sl = row.querySelector('input');
@@ -474,7 +562,7 @@ function renderSystemsSheet() {
 
 function renderSearchSheet() {
   sheetTitle.textContent = 'Terminologia Anatomica (TA2) Ara';
-  sheetBody.innerHTML = '<input id="sInput" class="search-box" type="search" placeholder="Örn: Ostium sinus coronarii, Os femoris, Aorta..." /><div id="sList"></div>';
+  sheetBody.innerHTML = '<input id="sInput" class="search-box" type="search" placeholder="Örn: Ostium sinus coronarii, Aorta, Pulmo, Hepar..." /><div id="sList"></div>';
   const input = document.getElementById('sInput');
   const list = document.getElementById('sList');
 
@@ -507,19 +595,19 @@ function renderSearchSheet() {
 }
 
 function renderCameraSheet() {
-  sheetTitle.textContent = 'Plana & Kamera';
+  sheetTitle.textContent = 'Plana & Odak Bölgeleri';
   const c = bodyBounds.center;
   const h = bodyBounds.height;
   const views = [
-    ['Anterior',  [c.x, c.y, c.z + h * 1.42], [c.x, c.y, c.z]],
-    ['Posterior', [c.x, c.y, c.z - h * 1.42], [c.x, c.y, c.z]],
-    ['Dexter',    [c.x - h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
-    ['Sinister',  [c.x + h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
-    ['Caput',     [c.x, bodyBounds.maxY - h * 0.1, c.z + h * 0.4], [c.x, bodyBounds.maxY - h * 0.1, c.z]],
-    ['Thorax',    [c.x, bodyBounds.maxY - h * 0.3, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.3, c.z]],
-    ['Abdomen',   [c.x, bodyBounds.maxY - h * 0.46, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.46, c.z]],
-    ['Pelvis',    [c.x, bodyBounds.maxY - h * 0.56, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.56, c.z]],
-    ['Totus',     [c.x, c.y, c.z + h * 1.48], [c.x, c.y, c.z]]
+    ['Cor (Kalp)',     [c.x + 0.03, bodyBounds.maxY - h * 0.29, c.z + h * 0.32], [c.x + 0.02, bodyBounds.maxY - h * 0.29, c.z]],
+    ['Pulmones',       [c.x, bodyBounds.maxY - h * 0.28, c.z + h * 0.48],        [c.x, bodyBounds.maxY - h * 0.28, c.z]],
+    ['Hepar & Gaster', [c.x, bodyBounds.maxY - h * 0.40, c.z + h * 0.44],        [c.x, bodyBounds.maxY - h * 0.40, c.z]],
+    ['Intestina',      [c.x, bodyBounds.maxY - h * 0.49, c.z + h * 0.46],        [c.x, bodyBounds.maxY - h * 0.49, c.z]],
+    ['Anterior',       [c.x, c.y, c.z + h * 1.42], [c.x, c.y, c.z]],
+    ['Posterior',      [c.x, c.y, c.z - h * 1.42], [c.x, c.y, c.z]],
+    ['Dexter',         [c.x - h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
+    ['Sinister',       [c.x + h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
+    ['Totus',          [c.x, c.y, c.z + h * 1.48], [c.x, c.y, c.z]]
   ];
   sheetBody.innerHTML = '<div class="cam-grid"></div>';
   const grid = sheetBody.querySelector('.cam-grid');
@@ -587,7 +675,7 @@ function renderDetailSheet() {
     <div class="detail-card">
       <p><strong>Terminologia Anatomica (Latince):</strong> ${target.latin}</p>
       ${target.ta2 ? `<p><strong>TA2 Kodu:</strong> ${target.ta2}</p>` : ''}
-      <p><strong>İngilizce / Kayıt Adı:</strong> ${target.name}</p>
+      <p><strong>Kayıt Adı:</strong> ${target.name}</p>
       <p><strong>Regio:</strong> ${target.region}</p>
       ${note ? `<p><strong>Not:</strong> ${note}</p>` : ''}
       ${ent ? '<button id="btnDetFocus" class="item-btn" style="margin-top:10px;text-align:center;"><strong>Kamerayı Odakla</strong></button>' : ''}
