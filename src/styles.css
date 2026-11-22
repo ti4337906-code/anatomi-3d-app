@@ -18,35 +18,42 @@ html, body {
 .pin-tag {
   position: absolute; transform: translate(-50%, -100%);
   pointer-events: auto; cursor: pointer;
-  background: rgba(20, 23, 28, 0.92); color: #f8fafc;
+  background: rgba(20, 23, 28, 0.94); color: #f8fafc;
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 6px; padding: 3px 7px; font-size: 11px; font-weight: 600;
   white-space: nowrap; box-shadow: 0 3px 10px rgba(0,0,0,0.45);
 }
-.pin-tag.active { background: #e11d48; border-color: #fda4af; color: #fff; z-index: 25; }
+.pin-tag.active { background: #dc2626; border-color: #fca5a5; color: #fff; z-index: 25; }
 
 .hud-top {
   position: fixed; top: max(10px, env(safe-area-inset-top)); left: 10px; right: 10px;
-  z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 6px;
   pointer-events: none;
 }
-.brand-chip, .status-chip, .hud-mini-btn {
+.brand-chip, .hud-mini-btn {
   pointer-events: auto;
-  background: rgba(24, 28, 34, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 10px; padding: 7px 12px; font-size: 12px; color: #f1f5f9;
+  background: rgba(24, 28, 34, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px; padding: 7px 11px; font-size: 12px; color: #f1f5f9;
 }
 .brand-chip { font-weight: 700; }
-.status-chip { font-size: 11px; color: #cbd5e1; max-width: 44vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hud-mini-btn { cursor: pointer; font-weight: 600; }
+.hud-mini-btn.active { background: #f1f5f9; color: #0f172a; border-color: #f1f5f9; }
+
+.status-bar {
+  position: fixed; top: calc(max(10px, env(safe-area-inset-top)) + 40px); left: 10px;
+  z-index: 19; font-size: 11px; color: #94a3b8;
+  background: rgba(20, 23, 28, 0.78); padding: 3px 9px; border-radius: 8px;
+  pointer-events: none;
+}
 
 .selected-pill {
-  position: fixed; top: calc(max(10px, env(safe-area-inset-top)) + 44px); left: 10px; right: 10px;
+  position: fixed; top: calc(max(10px, env(safe-area-inset-top)) + 64px); left: 10px; right: 10px;
   z-index: 22; display: flex; align-items: center; gap: 5px;
   background: rgba(24, 28, 34, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 12px; padding: 8px 10px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
 }
 .sel-text { flex: 1; min-width: 0; cursor: pointer; }
 .sel-text strong { display: block; font-size: 13px; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -55,7 +62,7 @@ html, body {
   background: #2b313c; border: 1px solid rgba(255, 255, 255, 0.16);
   color: #e2e8f0; border-radius: 7px; padding: 6px 8px; font-size: 11px; font-weight: 600; cursor: pointer;
 }
-.pill-action.active { background: #e2e8f0; color: #111827; }
+.pill-action.active { background: #f1f5f9; color: #0f172a; }
 .pill-close {
   background: #3f2228; border: 1px solid rgba(244, 63, 94, 0.45);
   color: #fecdd3; border-radius: 7px; width: 28px; height: 28px; font-size: 13px; cursor: pointer;
@@ -64,7 +71,7 @@ html, body {
 .bottom-nav {
   position: fixed; bottom: max(10px, env(safe-area-inset-bottom)); left: 10px; right: 10px;
   z-index: 25; display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;
-  background: rgba(22, 26, 32, 0.95);
+  background: rgba(22, 26, 32, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 14px; padding: 6px;
 }
@@ -110,6 +117,13 @@ html, body {
 .toggle-btn.on { background: #f1f5f9; border-color: #f1f5f9; color: #0f172a; }
 .slider-row { display: flex; align-items: center; gap: 10px; font-size: 11px; color: #94a3b8; }
 .slider-row input { flex: 1; accent-color: #e2e8f0; }
+
+.legend-row {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;
+  padding: 8px; border-radius: 10px; background: #191d24; border: 1px solid rgba(255,255,255,0.08);
+  font-size: 11px; color: #cbd5e1;
+}
+.legend-item { display: inline-flex; align-items: center; gap: 4px; }
 
 .search-box {
   width: 100%; padding: 10px 12px; border-radius: 9px; margin-bottom: 10px;

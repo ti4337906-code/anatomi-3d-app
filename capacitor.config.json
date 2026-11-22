@@ -1,9 +1,9 @@
 {
   "appId": "com.anatomi3d.atlas",
-  "appName": "Anatomi 3D Atlas",
+  "appName": "Atlas Anatomicus 3D",
   "webDir": "dist",
   "android": {
     "allowMixedContent": false,
-    "backgroundColor": "#070b14"
+    "backgroundColor": "#14171c"
   }
 }

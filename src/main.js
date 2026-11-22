@@ -2,10 +2,19 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { findClinicalNote } from './anatomy-tr.js';
+import {
+  createAtlasState,
+  registerMeshToEntity,
+  computeEntityVisual,
+  toggleIsolate,
+  searchAtlas,
+  computeSafeFocusPose,
+  computeClipPlaneConfig
+} from './atlas-core.js';
 
 const viewport = document.getElementById('viewport');
 const pinsLayer = document.getElementById('pinsLayer');
-const statusChip = document.getElementById('statusChip');
+const statusBar = document.getElementById('statusBar');
 const sheet = document.getElementById('sheet');
 const sheetTitle = document.getElementById('sheetTitle');
 const sheetBody = document.getElementById('sheetBody');
@@ -31,7 +40,6 @@ controls.target.set(0, 0.9, 0);
 controls.minDistance = 0.08;
 controls.maxDistance = 12;
 
-// Dogal medikal studyo isigi (gercek anatomik renkleri bozmayan notr beyaz)
 scene.add(new THREE.HemisphereLight(0xffffff, 0x3b4252, 0.95));
 const keyL = new THREE.DirectionalLight(0xfffaf0, 1.15);
 keyL.position.set(4, 6, 6);
@@ -48,26 +56,21 @@ const gltfLoader = new GLTFLoader();
 const modelRoot = new THREE.Group();
 scene.add(modelRoot);
 
+const state = createAtlasState();
 let manifest = null;
-let landmarks = [];
-const systemState = {};
-const allStructures = [];
-const meshToRecord = new Map();
+const systemMeta = {};
+const systemGroups = {};
+const systemLoaded = {};
+const systemLoading = {};
+const meshToEntity = new Map();
 
-let selectedRecord = null;
-let activeLandmark = null;
-let isolateMode = false;
 let pinsEnabled = false;
-let sliceEnabled = false;
-let sliceAxis = 'axial';
-let sliceValue = 1.9;
 let activeSheet = null;
 let bodyBounds = { minY: 0, maxY: 1.85, center: new THREE.Vector3(0, 0.92, 0), height: 1.85 };
 
-// 3D marker sphere for focused landmark (e.g. Ostium sinus coronarii)
 const landmarkMarker = new THREE.Mesh(
   new THREE.SphereGeometry(0.008, 16, 16),
-  new THREE.MeshBasicMaterial({ color: 0xe11d48, depthTest: false })
+  new THREE.MeshBasicMaterial({ color: 0xdc2626, depthTest: false })
 );
 landmarkMarker.renderOrder = 999;
 landmarkMarker.visible = false;
@@ -110,53 +113,58 @@ async function init() {
     if (!res.ok) throw new Error('manifest.json bulunamadı');
     manifest = await res.json();
   } catch (e) {
-    statusChip.textContent = 'Model bulunamadı';
+    statusBar.textContent = 'Model manifesti bulunamadı';
     return;
   }
 
   try {
     const lres = await fetch('./models/landmarks.json');
-    if (lres.ok) landmarks = await lres.json();
-  } catch (e) { landmarks = []; }
+    if (lres.ok) state.landmarks = await lres.json();
+  } catch (e) { state.landmarks = []; }
 
   manifest.systems.forEach((sys, idx) => {
     const g = new THREE.Group();
     modelRoot.add(g);
-    const isDefault = sys.id === 'skeletal' || idx === 0;
-    systemState[sys.id] = {
-      meta: sys, group: g, loaded: false, loading: false,
-      visible: isDefault, opacity: sys.defaultOpacity || 1.0
+    systemMeta[sys.id] = sys;
+    systemGroups[sys.id] = g;
+    systemLoaded[sys.id] = false;
+    systemLoading[sys.id] = false;
+    state.systems[sys.id] = {
+      visible: sys.id === 'skeletal' || idx === 0,
+      opacity: sys.defaultOpacity || 1.0
     };
   });
 
-  const firstSys = systemState.skeletal ? 'skeletal' : manifest.systems[0].id;
-  statusChip.textContent = 'İskelet yükleniyor...';
+  const firstSys = systemMeta.skeletal ? 'skeletal' : manifest.systems[0].id;
+  statusBar.textContent = 'Systema skeletale yükleniyor...';
   await loadSystem(firstSys);
   fitCameraToModel(true);
-  refreshMaterials();
-  statusChip.textContent = `${allStructures.length} yapı • ${landmarks.length} nokta`;
+  refreshAllVisuals();
+  updateStatusBar();
+}
+
+function updateStatusBar() {
+  statusBar.textContent = `${state.entities.size} structurae • ${state.landmarks.length} puncta (TA2)`;
 }
 
 function loadSystem(sysId) {
-  const st = systemState[sysId];
-  if (!st || st.loaded || st.loading) return Promise.resolve();
-  st.loading = true;
-  statusChip.textContent = `${st.meta.name} yükleniyor...`;
+  if (!systemMeta[sysId] || systemLoaded[sysId] || systemLoading[sysId]) return Promise.resolve();
+  systemLoading[sysId] = true;
+  statusBar.textContent = `${systemMeta[sysId].name} yükleniyor...`;
 
   return new Promise((resolve) => {
     gltfLoader.load(
-      `./${st.meta.file}`,
+      `./${systemMeta[sysId].file}`,
       (gltf) => {
         const root = gltf.scene;
         root.traverse(obj => {
           if (!obj.isMesh) return;
-          // Blender'in seffaf/transmission ayarlarini atip sadece gercek rengi alarak %100 KATI materyal olustur
-          let baseColor = new THREE.Color(st.meta.color);
+          let naturalColor = new THREE.Color(systemMeta[sysId].color);
           if (obj.material && obj.material.color) {
-            baseColor.copy(obj.material.color);
+            naturalColor.copy(obj.material.color);
           }
-          const m = new THREE.MeshStandardMaterial({
-            color: baseColor,
+          const mat = new THREE.MeshStandardMaterial({
+            color: naturalColor.clone(),
             roughness: 0.52,
             metalness: 0.04,
             transparent: false,
@@ -166,36 +174,33 @@ function loadSystem(sysId) {
             side: THREE.FrontSide,
             clippingPlanes: [clipPlane]
           });
-          m.userData.baseEmissive = new THREE.Color(0x000000);
-          obj.material = m;
+          mat.userData.naturalColor = naturalColor.clone();
+          obj.material = mat;
 
           const ud = obj.userData || {};
-          const rec = {
-            id: `${sysId}:${obj.name}`,
-            mesh: obj,
-            name: ud.anat_name || obj.name,
-            latin: ud.anat_latin || obj.name,
-            ta2: ud.anat_ta2 || '',
+          const ent = registerMeshToEntity(state, {
             system: sysId,
-            region: ud.anat_region || st.meta.name,
-            hidden: false,
-            faded: false,
-            mat: m
-          };
-          allStructures.push(rec);
-          meshToRecord.set(obj, rec);
+            meshName: obj.name,
+            latin: ud.anat_latin || ud.anat_name || obj.name,
+            name: ud.anat_name || obj.name,
+            ta2: ud.anat_ta2 || '',
+            subtype: ud.anat_subtype || '',
+            region: ud.anat_region || systemMeta[sysId].name,
+            meshRef: obj
+          });
+          meshToEntity.set(obj, ent);
         });
-        st.group.add(root);
-        st.loaded = true;
-        st.loading = false;
-        statusChip.textContent = `${allStructures.length} yapı • ${landmarks.length} nokta`;
+        systemGroups[sysId].add(root);
+        systemLoaded[sysId] = true;
+        systemLoading[sysId] = false;
+        updateStatusBar();
         resolve();
       },
       undefined,
       (err) => {
         console.error(err);
-        st.loading = false;
-        toast(`${st.meta.name} yüklenemedi`);
+        systemLoading[sysId] = false;
+        toast(`${systemMeta[sysId].name} yüklenemedi`);
         resolve();
       }
     );
@@ -230,64 +235,81 @@ function fitCameraToModel(resetView = false) {
   }
 }
 
-function refreshMaterials() {
-  allStructures.forEach(rec => {
-    const sys = systemState[rec.system];
-    const isSel = selectedRecord && selectedRecord.id === rec.id;
-    let vis = sys.visible && !rec.hidden;
-    if (isolateMode && selectedRecord) vis = isSel;
-    rec.mesh.visible = vis;
-
-    let op = rec.faded ? 0.22 : sys.opacity;
-    if (isSel && !rec.faded) op = 1.0;
-
-    const needsTrans = op < 0.99;
-    if (rec.mat.transparent !== needsTrans) {
-      rec.mat.transparent = needsTrans;
-      rec.mat.needsUpdate = true;
+function refreshAllVisuals() {
+  for (const ent of state.entities.values()) {
+    const vis = computeEntityVisual(state, ent);
+    for (const mesh of ent.meshes) {
+      mesh.visible = vis.visible;
+      const mat = mesh.material;
+      if (vis.colorHex !== null) {
+        mat.color.setHex(vis.colorHex);
+      } else {
+        mat.color.copy(mat.userData.naturalColor);
+      }
+      if (mat.transparent !== vis.transparent) {
+        mat.transparent = vis.transparent;
+        mat.needsUpdate = true;
+      }
+      mat.opacity = vis.opacity;
+      mat.depthWrite = vis.depthWrite;
+      if (vis.isSelected) {
+        mat.emissive.setHex(0x3b82f6);
+        mat.emissiveIntensity = 0.45;
+      } else {
+        mat.emissive.setHex(0x000000);
+        mat.emissiveIntensity = 1.0;
+      }
     }
-    rec.mat.opacity = op;
-    rec.mat.depthWrite = !needsTrans;
-
-    if (isSel) {
-      rec.mat.emissive.setHex(0x3b82f6);
-      rec.mat.emissiveIntensity = 0.45;
-    } else {
-      rec.mat.emissive.copy(rec.mat.userData.baseEmissive);
-      rec.mat.emissiveIntensity = 1.0;
-    }
-  });
+  }
 }
 
-// Landmark world coordinate helper (applies same modelRoot transform)
+function getEntityBoundingBox(ent) {
+  const box = new THREE.Box3();
+  for (const mesh of ent.meshes) {
+    box.expandByObject(mesh);
+  }
+  return box;
+}
+
+function focusEntity(ent) {
+  const box = getEntityBoundingBox(ent);
+  if (box.isEmpty()) return;
+  const center = box.getCenter(new THREE.Vector3());
+  const diag = box.getSize(new THREE.Vector3()).length();
+  const pose = computeSafeFocusPose(camera.position, controls.target, center, diag);
+  controls.target.set(pose.target.x, pose.target.y, pose.target.z);
+  camera.position.set(pose.position.x, pose.position.y, pose.position.z);
+  controls.update();
+}
+
 function getLandmarkWorldPos(lm) {
   return new THREE.Vector3(lm.pos[0], lm.pos[1], lm.pos[2]).applyMatrix4(modelRoot.matrixWorld);
 }
 
 async function focusLandmark(lm) {
-  // Ensure owning system is loaded and visible
-  const st = systemState[lm.system];
-  if (st) {
-    st.visible = true;
-    if (!st.loaded) await loadSystem(lm.system);
+  if (state.systems[lm.system]) {
+    state.systems[lm.system].visible = true;
+    if (!systemLoaded[lm.system]) await loadSystem(lm.system);
     fitCameraToModel(false);
-    refreshMaterials();
+    refreshAllVisuals();
   }
   modelRoot.updateMatrixWorld(true);
   const wpos = getLandmarkWorldPos(lm);
-  activeLandmark = lm;
+  state.selectedId = null;
+  state.isolateMode = false;
+  state.activeLandmark = lm;
   landmarkMarker.position.copy(wpos);
   landmarkMarker.visible = true;
 
-  controls.target.copy(wpos);
-  const dir = camera.position.clone().sub(controls.target).normalize();
-  camera.position.copy(wpos).addScaledVector(dir, 0.28);
+  const pose = computeSafeFocusPose(camera.position, controls.target, wpos, 0.14);
+  controls.target.set(pose.target.x, pose.target.y, pose.target.z);
+  camera.position.set(pose.position.x, pose.position.y, pose.position.z);
   controls.update();
 
-  document.getElementById('pillName').textContent = lm.name;
-  document.getElementById('pillLatin').textContent = `${lm.latin} (Anatomik Nokta)`;
+  document.getElementById('pillLatin').textContent = lm.latin;
+  document.getElementById('pillSub').textContent = `${lm.ta2 ? lm.ta2 + ' • ' : ''}Punctum anatomicum`;
   selectedPill.classList.remove('hidden');
-  toast(`Odaklandı: ${lm.name}`);
+  toast(`Odaklandı: ${lm.latin}`);
 }
 
 // Raycast Picking
@@ -305,94 +327,110 @@ renderer.domElement.addEventListener('pointerup', e => {
   ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(ndc, camera);
 
-  const visibleMeshes = allStructures.filter(r => r.mesh.visible).map(r => r.mesh);
+  const visibleMeshes = [];
+  for (const ent of state.entities.values()) {
+    for (const m of ent.meshes) {
+      if (m.visible) visibleMeshes.push(m);
+    }
+  }
   const hits = raycaster.intersectObjects(visibleMeshes, false);
   if (!hits.length) { clearSelection(); return; }
 
-  const rec = meshToRecord.get(hits[0].object);
-  if (rec) selectRecord(rec, false);
+  const ent = meshToEntity.get(hits[0].object);
+  if (ent) selectEntity(ent, false);
 });
 
-function selectRecord(rec, focus = true) {
-  activeLandmark = null;
+function selectEntity(ent, focus = true) {
+  state.activeLandmark = null;
   landmarkMarker.visible = false;
-  selectedRecord = rec;
-  document.getElementById('pillName').textContent = rec.name;
-  document.getElementById('pillLatin').textContent = rec.latin;
-  document.getElementById('btnPillFade').classList.toggle('active', rec.faded);
+  state.selectedId = ent.id;
+  document.getElementById('pillLatin').textContent = ent.latin;
+  document.getElementById('pillSub').textContent = `${ent.ta2 ? ent.ta2 + ' • ' : ''}${ent.name}`;
+  document.getElementById('btnPillFade').classList.toggle('active', ent.faded);
+  document.getElementById('btnPillIsolate').classList.toggle('active', state.isolateMode);
   selectedPill.classList.remove('hidden');
-  refreshMaterials();
-  if (focus) focusRecord(rec);
+  refreshAllVisuals();
+  if (focus) focusEntity(ent);
 }
 
 function clearSelection() {
-  selectedRecord = null;
-  activeLandmark = null;
+  state.selectedId = null;
+  state.activeLandmark = null;
+  state.isolateMode = false;
   landmarkMarker.visible = false;
-  isolateMode = false;
   document.getElementById('btnPillIsolate').classList.remove('active');
   document.getElementById('btnPillFade').classList.remove('active');
   selectedPill.classList.add('hidden');
   if (activeSheet === 'detail') closeSheet();
-  refreshMaterials();
+  refreshAllVisuals();
 }
 
-function focusRecord(rec) {
-  const box = new THREE.Box3().setFromObject(rec.mesh);
-  const c = box.getCenter(new THREE.Vector3());
-  const sz = box.getSize(new THREE.Vector3()).length();
-  controls.target.copy(c);
-  const dir = camera.position.clone().sub(controls.target).normalize();
-  camera.position.copy(c).addScaledVector(dir, Math.max(0.24, Math.min(2.2, sz * 2.2)));
-  controls.update();
-}
+// Color Mode Toggle (Doğal vs Atlas: Arter Kırmızı, Ven Mavi, Lenf Yeşil, Sinir Sarı)
+document.getElementById('btnColorMode').addEventListener('click', (e) => {
+  state.colorMode = state.colorMode === 'natural' ? 'atlas' : 'natural';
+  const isAtlas = state.colorMode === 'atlas';
+  e.target.textContent = isAtlas ? 'Renk: Atlas' : 'Renk: Doğal';
+  e.target.classList.toggle('active', isAtlas);
+  refreshAllVisuals();
+  toast(isAtlas ? 'Atlas Modu: Arter Kırmızı • Ven Mavi • Lenf Yeşil • Sinir Sarı' : 'Doğal anatomik renkler aktif');
+});
 
-document.getElementById('btnOpenDetailFromPill').addEventListener('click', () => (selectedRecord || activeLandmark) && openSheet('detail'));
+document.getElementById('btnOpenDetailFromPill').addEventListener('click', () => (state.selectedId || state.activeLandmark) && openSheet('detail'));
 document.getElementById('btnPillClose').addEventListener('click', clearSelection);
 document.getElementById('btnPillFade').addEventListener('click', (e) => {
-  if (!selectedRecord) return;
-  selectedRecord.faded = !selectedRecord.faded;
-  e.target.classList.toggle('active', selectedRecord.faded);
-  refreshMaterials();
+  const ent = state.entities.get(state.selectedId);
+  if (!ent) return;
+  ent.faded = !ent.faded;
+  e.target.classList.toggle('active', ent.faded);
+  refreshAllVisuals();
 });
 document.getElementById('btnPillHide').addEventListener('click', () => {
-  if (!selectedRecord) return;
-  selectedRecord.hidden = true;
-  toast(`${selectedRecord.name} gizlendi`);
+  const ent = state.entities.get(state.selectedId);
+  if (!ent) return;
+  ent.hidden = true;
+  toast(`${ent.latin} gizlendi`);
   clearSelection();
 });
 document.getElementById('btnPillIsolate').addEventListener('click', (e) => {
-  if (!selectedRecord) return;
-  isolateMode = !isolateMode;
-  e.target.classList.toggle('active', isolateMode);
-  if (isolateMode) {
-    selectedRecord.faded = false;
-    document.getElementById('btnPillFade').classList.remove('active');
-    focusRecord(selectedRecord);
-  }
-  refreshMaterials();
+  const ent = state.entities.get(state.selectedId);
+  if (!ent) return;
+  const iso = toggleIsolate(state);
+  e.target.classList.toggle('active', iso);
+  document.getElementById('btnPillFade').classList.toggle('active', ent.faded);
+  refreshAllVisuals();
+  if (iso) focusEntity(ent);
 });
 
 // Bottom Sheets
 function renderSystemsSheet() {
-  sheetTitle.textContent = 'Anatomik Sistemler';
-  sheetBody.innerHTML = '';
+  sheetTitle.textContent = 'Systemata Anatomica (TA2)';
+  sheetBody.innerHTML = `
+    <div class="legend-row">
+      <span class="legend-item"><span class="sys-dot" style="background:#d92626"></span>Arteriae</span>
+      <span class="legend-item"><span class="sys-dot" style="background:#1d4ed8"></span>Venae</span>
+      <span class="legend-item"><span class="sys-dot" style="background:#16a34a"></span>Lymphatica</span>
+      <span class="legend-item"><span class="sys-dot" style="background:#eab308"></span>Nervi</span>
+      <span class="legend-item"><span class="sys-dot" style="background:#93c5fd"></span>Ligamenta</span>
+    </div>
+  `;
 
-  const modCount = allStructures.filter(r => r.hidden || r.faded).length;
+  let modCount = 0;
+  for (const e of state.entities.values()) if (e.hidden || e.faded) modCount++;
   if (modCount > 0) {
     const restoreBtn = document.createElement('button');
     restoreBtn.className = 'item-btn';
     restoreBtn.innerHTML = `<strong>Gizli / Saydam Yapıları Sıfırla (${modCount})</strong>`;
     restoreBtn.onclick = () => {
-      allStructures.forEach(r => { r.hidden = false; r.faded = false; });
-      refreshMaterials();
+      for (const e of state.entities.values()) { e.hidden = false; e.faded = false; }
+      refreshAllVisuals();
       renderSystemsSheet();
     };
     sheetBody.appendChild(restoreBtn);
   }
 
-  Object.values(systemState).forEach(st => {
-    const m = st.meta;
+  Object.keys(systemMeta).forEach(sysId => {
+    const m = systemMeta[sysId];
+    const st = state.systems[sysId];
     const row = document.createElement('div');
     row.className = 'sys-row';
     row.innerHTML = `
@@ -401,7 +439,7 @@ function renderSystemsSheet() {
           <span class="sys-dot" style="background:${m.color}"></span>
           <div>
             <div>${m.name}</div>
-            <div class="sys-meta">${m.meshCount} yapı • ${m.sizeMB} MB</div>
+            <div class="sys-meta">${m.tr || ''} • ${m.meshCount} yapı • ${m.sizeMB} MB</div>
           </div>
         </div>
         <button class="toggle-btn ${st.visible ? 'on' : ''}">${st.visible ? 'AÇIK' : 'KAPALI'}</button>
@@ -415,12 +453,12 @@ function renderSystemsSheet() {
     const btn = row.querySelector('.toggle-btn');
     btn.onclick = async () => {
       st.visible = !st.visible;
-      if (st.visible && !st.loaded) {
+      if (st.visible && !systemLoaded[sysId]) {
         btn.textContent = 'Yükleniyor...';
-        await loadSystem(m.id);
+        await loadSystem(sysId);
         fitCameraToModel(false);
       }
-      refreshMaterials();
+      refreshAllVisuals();
       renderSystemsSheet();
     };
     const sl = row.querySelector('input');
@@ -428,50 +466,40 @@ function renderSystemsSheet() {
     sl.oninput = (e) => {
       st.opacity = parseFloat(e.target.value);
       lbl.textContent = `${Math.round(st.opacity * 100)}%`;
-      refreshMaterials();
+      refreshAllVisuals();
     };
     sheetBody.appendChild(row);
   });
 }
 
 function renderSearchSheet() {
-  sheetTitle.textContent = 'Yapı & Anatomik Nokta Ara';
-  sheetBody.innerHTML = '<input id="sInput" class="search-box" type="search" placeholder="Örn: Ostium sinus coronarii, Femur, Aorta..." /><div id="sList"></div>';
+  sheetTitle.textContent = 'Terminologia Anatomica (TA2) Ara';
+  sheetBody.innerHTML = '<input id="sInput" class="search-box" type="search" placeholder="Örn: Ostium sinus coronarii, Os femoris, Aorta..." /><div id="sList"></div>';
   const input = document.getElementById('sInput');
   const list = document.getElementById('sList');
 
   const draw = () => {
-    const q = input.value.trim().toLowerCase();
+    const { landmarks: lmMatches, entities: entMatches } = searchAtlas(state, input.value);
     list.innerHTML = '';
-
-    // 1. Search Landmarks (Ostium, Foramen, Sulcus, etc.)
-    const lmMatches = landmarks.filter(l =>
-      q.length >= 2 && (l.name.toLowerCase().includes(q) || l.latin.toLowerCase().includes(q) || l.ta2.toLowerCase().includes(q))
-    ).slice(0, 40);
-
-    // 2. Search Loaded Meshes + Manifest structures
-    const meshMatches = allStructures.filter(r =>
-      !q || r.name.toLowerCase().includes(q) || r.latin.toLowerCase().includes(q) || r.ta2.toLowerCase().includes(q)
-    ).slice(0, 50);
 
     lmMatches.forEach(lm => {
       const b = document.createElement('button');
       b.className = 'item-btn';
-      b.innerHTML = `<strong><span class="badge-pin">NOKTA</span>${lm.name}</strong><small>${lm.latin} • ${lm.region}</small>`;
+      b.innerHTML = `<strong><span class="badge-pin">PUNCTUM</span>${lm.latin}</strong><small>${lm.ta2 ? lm.ta2 + ' • ' : ''}${lm.region}</small>`;
       b.onclick = async () => { closeSheet(); await focusLandmark(lm); };
       list.appendChild(b);
     });
 
-    meshMatches.forEach(rec => {
+    entMatches.forEach(ent => {
       const b = document.createElement('button');
       b.className = 'item-btn';
-      b.innerHTML = `<strong>${rec.name}</strong><small>${rec.latin}</small>`;
-      b.onclick = () => { selectRecord(rec, true); closeSheet(); };
+      b.innerHTML = `<strong>${ent.latin}</strong><small>${ent.ta2 ? ent.ta2 + ' • ' : ''}${ent.name}</small>`;
+      b.onclick = () => { selectEntity(ent, true); closeSheet(); };
       list.appendChild(b);
     });
 
-    if (!lmMatches.length && !meshMatches.length) {
-      list.innerHTML = '<div class="sys-meta">Sonuç bulunamadı. Diğer sistemleri Sistemler sekmesinden açabilirsiniz.</div>';
+    if (!lmMatches.length && !entMatches.length) {
+      list.innerHTML = '<div class="sys-meta">Sonuç bulunamadı. İlgili sistemi Systemata sekmesinden açabilirsiniz.</div>';
     }
   };
   input.oninput = draw;
@@ -479,19 +507,19 @@ function renderSearchSheet() {
 }
 
 function renderCameraSheet() {
-  sheetTitle.textContent = 'Kamera Açıları';
+  sheetTitle.textContent = 'Plana & Kamera';
   const c = bodyBounds.center;
   const h = bodyBounds.height;
   const views = [
-    ['Ön',      [c.x, c.y, c.z + h * 1.42], [c.x, c.y, c.z]],
-    ['Arka',    [c.x, c.y, c.z - h * 1.42], [c.x, c.y, c.z]],
-    ['Sağ Yan', [c.x - h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
-    ['Sol Yan', [c.x + h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
-    ['Baş',     [c.x, bodyBounds.maxY - h * 0.1, c.z + h * 0.4], [c.x, bodyBounds.maxY - h * 0.1, c.z]],
-    ['Toraks',  [c.x, bodyBounds.maxY - h * 0.3, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.3, c.z]],
-    ['Abdomen', [c.x, bodyBounds.maxY - h * 0.46, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.46, c.z]],
-    ['Pelvis',  [c.x, bodyBounds.maxY - h * 0.56, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.56, c.z]],
-    ['Tam Boy', [c.x, c.y, c.z + h * 1.48], [c.x, c.y, c.z]]
+    ['Anterior',  [c.x, c.y, c.z + h * 1.42], [c.x, c.y, c.z]],
+    ['Posterior', [c.x, c.y, c.z - h * 1.42], [c.x, c.y, c.z]],
+    ['Dexter',    [c.x - h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
+    ['Sinister',  [c.x + h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
+    ['Caput',     [c.x, bodyBounds.maxY - h * 0.1, c.z + h * 0.4], [c.x, bodyBounds.maxY - h * 0.1, c.z]],
+    ['Thorax',    [c.x, bodyBounds.maxY - h * 0.3, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.3, c.z]],
+    ['Abdomen',   [c.x, bodyBounds.maxY - h * 0.46, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.46, c.z]],
+    ['Pelvis',    [c.x, bodyBounds.maxY - h * 0.56, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.56, c.z]],
+    ['Totus',     [c.x, c.y, c.z + h * 1.48], [c.x, c.y, c.z]]
   ];
   sheetBody.innerHTML = '<div class="cam-grid"></div>';
   const grid = sheetBody.querySelector('.cam-grid');
@@ -504,84 +532,95 @@ function renderCameraSheet() {
   });
 }
 
-function updateClip() {
-  if (!sliceEnabled) { clipPlane.constant = 100; return; }
-  if (sliceAxis === 'axial') clipPlane.normal.set(0, -1, 0);
-  else if (sliceAxis === 'sagittal') clipPlane.normal.set(-1, 0, 0);
-  else clipPlane.normal.set(0, 0, -1);
-  clipPlane.constant = sliceValue;
+function applyClip() {
+  const cfg = computeClipPlaneConfig(state.sliceEnabled, state.sliceAxis, state.sliceValue);
+  clipPlane.normal.set(...cfg.normal);
+  clipPlane.constant = cfg.constant;
 }
 
 function renderSliceSheet() {
-  sheetTitle.textContent = 'Anatomik Kesit Düzlemi';
-  const min = sliceAxis === 'axial' ? bodyBounds.minY : -0.6;
-  const max = sliceAxis === 'axial' ? bodyBounds.maxY + 0.05 : 0.6;
+  sheetTitle.textContent = 'Sectio Anatomica (Kesit)';
+  const min = state.sliceAxis === 'axial' ? bodyBounds.minY : -0.6;
+  const max = state.sliceAxis === 'axial' ? bodyBounds.maxY + 0.05 : 0.6;
   sheetBody.innerHTML = `
     <div class="cam-grid" style="margin-bottom:12px;">
-      <button data-ax="axial" class="cam-tile ${sliceAxis === 'axial' ? 'active' : ''}">Aksiyel</button>
-      <button data-ax="sagittal" class="cam-tile ${sliceAxis === 'sagittal' ? 'active' : ''}">Sagittal</button>
-      <button data-ax="coronal" class="cam-tile ${sliceAxis === 'coronal' ? 'active' : ''}">Koronal</button>
+      <button data-ax="axial" class="cam-tile ${state.sliceAxis === 'axial' ? 'active' : ''}">Transversalis</button>
+      <button data-ax="sagittal" class="cam-tile ${state.sliceAxis === 'sagittal' ? 'active' : ''}">Sagittalis</button>
+      <button data-ax="coronal" class="cam-tile ${state.sliceAxis === 'coronal' ? 'active' : ''}">Coronalis</button>
     </div>
     <div class="slider-row" style="margin-bottom:12px;">
       <span>Kesit</span>
-      <input id="slSlice" type="range" min="${min}" max="${max}" step="0.02" value="${Math.min(max, Math.max(min, sliceValue))}" />
+      <input id="slSlice" type="range" min="${min}" max="${max}" step="0.02" value="${Math.min(max, Math.max(min, state.sliceValue))}" />
     </div>
     <button id="btnToggleSlice" class="item-btn" style="text-align:center;">
-      <strong>${sliceEnabled ? 'Kesiti Kapat' : 'Kesiti Etkinleştir'}</strong>
+      <strong>${state.sliceEnabled ? 'Kesiti Kapat' : 'Kesiti Etkinleştir'}</strong>
     </button>
   `;
   sheetBody.querySelectorAll('[data-ax]').forEach(b => {
-    b.onclick = () => { sliceAxis = b.dataset.ax; sliceEnabled = true; sliceValue = sliceAxis === 'axial' ? bodyBounds.center.y : 0; updateClip(); renderSliceSheet(); };
+    b.onclick = () => {
+      state.sliceAxis = b.dataset.ax;
+      state.sliceEnabled = true;
+      state.sliceValue = state.sliceAxis === 'axial' ? bodyBounds.center.y : 0;
+      applyClip();
+      renderSliceSheet();
+    };
   });
-  document.getElementById('slSlice').oninput = (e) => { sliceEnabled = true; sliceValue = parseFloat(e.target.value); updateClip(); };
-  document.getElementById('btnToggleSlice').onclick = () => { sliceEnabled = !sliceEnabled; updateClip(); renderSliceSheet(); };
+  document.getElementById('slSlice').oninput = (e) => {
+    state.sliceEnabled = true;
+    state.sliceValue = parseFloat(e.target.value);
+    applyClip();
+  };
+  document.getElementById('btnToggleSlice').onclick = () => {
+    state.sliceEnabled = !state.sliceEnabled;
+    applyClip();
+    renderSliceSheet();
+  };
 }
 
 function renderDetailSheet() {
-  const target = selectedRecord || activeLandmark;
+  const ent = state.entities.get(state.selectedId);
+  const target = ent || state.activeLandmark;
   if (!target) return;
-  sheetTitle.textContent = activeLandmark ? 'Anatomik İşaret Noktası' : 'Yapı Detayı';
-  const note = findClinicalNote(target.name + ' ' + target.latin);
+  sheetTitle.textContent = ent ? 'Structura Anatomica' : 'Punctum Anatomicum';
+  const note = findClinicalNote(`${target.latin} ${target.name}`);
   sheetBody.innerHTML = `
     <div class="detail-card">
-      <p><strong>Adı:</strong> ${target.name}</p>
-      <p><strong>Latince / TA2:</strong> ${target.latin} ${target.ta2 ? '(' + target.ta2 + ')' : ''}</p>
-      <p><strong>Bölge:</strong> ${target.region}</p>
-      ${note ? `<p><strong>Klinik Not:</strong> ${note}</p>` : ''}
-      ${selectedRecord ? '<button id="btnDetFocus" class="item-btn" style="margin-top:10px;text-align:center;"><strong>Kamerayı Odakla</strong></button>' : ''}
+      <p><strong>Terminologia Anatomica (Latince):</strong> ${target.latin}</p>
+      ${target.ta2 ? `<p><strong>TA2 Kodu:</strong> ${target.ta2}</p>` : ''}
+      <p><strong>İngilizce / Kayıt Adı:</strong> ${target.name}</p>
+      <p><strong>Regio:</strong> ${target.region}</p>
+      ${note ? `<p><strong>Not:</strong> ${note}</p>` : ''}
+      ${ent ? '<button id="btnDetFocus" class="item-btn" style="margin-top:10px;text-align:center;"><strong>Kamerayı Odakla</strong></button>' : ''}
     </div>
   `;
   const bf = document.getElementById('btnDetFocus');
-  if (bf) bf.onclick = () => { focusRecord(selectedRecord); closeSheet(); };
+  if (bf) bf.onclick = () => { focusEntity(ent); closeSheet(); };
 }
 
-// 3D Floating Pins projection (shows nearest 25 landmarks when Pins toggled OR always shows activeLandmark)
 document.getElementById('btnPins').addEventListener('click', (e) => {
   pinsEnabled = !pinsEnabled;
   e.target.classList.toggle('active', pinsEnabled);
-  toast(pinsEnabled ? 'Yakın anatomik noktalar açık' : 'Pinler gizlendi');
+  toast(pinsEnabled ? 'Yakın anatomik pinler (TA2) açık' : 'Pinler gizlendi');
 });
 
 function updatePinsOverlay() {
   pinsLayer.innerHTML = '';
-  if (!pinsEnabled && !activeLandmark) return;
+  if (!pinsEnabled && !state.activeLandmark) return;
 
   const w = viewport.clientWidth;
   const h = viewport.clientHeight;
   const list = [];
 
-  if (activeLandmark) {
-    list.push({ lm: activeLandmark, active: true });
-  }
+  if (state.activeLandmark) list.push({ lm: state.activeLandmark, active: true });
   if (pinsEnabled) {
     const camDist = camera.position.distanceTo(controls.target);
     const maxR = Math.max(0.25, camDist * 0.7);
-    for (let i = 0; i < landmarks.length; i++) {
-      const lm = landmarks[i];
-      if (!systemState[lm.system] || !systemState[lm.system].visible) continue;
+    for (let i = 0; i < state.landmarks.length; i++) {
+      const lm = state.landmarks[i];
+      if (!state.systems[lm.system] || !state.systems[lm.system].visible) continue;
       const wp = getLandmarkWorldPos(lm);
       const d = wp.distanceTo(controls.target);
-      if (d <= maxR) list.push({ lm, active: lm === activeLandmark, d, wp });
+      if (d <= maxR) list.push({ lm, active: lm === state.activeLandmark, d, wp });
     }
     list.sort((a, b) => (a.d || 0) - (b.d || 0));
   }
@@ -598,16 +637,16 @@ function updatePinsOverlay() {
     el.className = 'pin-tag' + (item.active ? ' active' : '');
     el.style.left = `${x}px`;
     el.style.top = `${y}px`;
-    el.textContent = item.lm.name;
+    el.textContent = item.lm.latin;
     el.onclick = () => focusLandmark(item.lm);
     pinsLayer.appendChild(el);
   });
 }
 
 document.getElementById('btnReset').addEventListener('click', () => {
-  allStructures.forEach(r => { r.hidden = false; r.faded = false; });
-  sliceEnabled = false;
-  updateClip();
+  for (const e of state.entities.values()) { e.hidden = false; e.faded = false; }
+  state.sliceEnabled = false;
+  applyClip();
   clearSelection();
   closeSheet();
   fitCameraToModel(true);

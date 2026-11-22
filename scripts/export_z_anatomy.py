@@ -25,39 +25,56 @@ def _unhide_cols(lc):
 
 _unhide_cols(bpy.context.view_layer.layer_collection)
 
+# 1. Robust TA2.csv parser (detects delimiter and Latin/English/TA2 columns)
 ta2_lookup = {}
 if os.path.exists(ta2_path):
     with open(ta2_path, "r", encoding="utf-8", errors="replace") as f:
-        reader = csv.reader(f)
-        next(reader, None)
+        sample = f.read(4096)
+        f.seek(0)
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
+        except Exception:
+            dialect = csv.excel
+        reader = csv.reader(f, dialect)
+        header = [h.strip().lower() for h in (next(reader, None) or [])]
+
+        code_idx = next((i for i, h in enumerate(header) if "ta2" in h or "code" in h or "id" in h), 0)
+        lat_idx = next((i for i, h in enumerate(header) if "latin" in h), 1 if len(header) > 1 else 0)
+        eng_idx = next((i for i, h in enumerate(header) if "english" in h or "en" == h or "name" in h), 2 if len(header) > 2 else lat_idx)
+
         for row in reader:
-            joined = [c.strip() for c in row if c.strip()]
-            if len(joined) >= 2:
-                key = re.sub(r"[^a-z0-9]", "", joined[1].lower())
-                ta2_lookup[key] = {
-                    "ta2Code": joined[0],
-                    "latin": joined[1],
-                    "english": joined[2] if len(joined) > 2 else joined[1]
-                }
+            if not row or len(row) <= max(code_idx, lat_idx):
+                continue
+            code = row[code_idx].strip()
+            latin = row[lat_idx].strip() if lat_idx < len(row) else ""
+            eng = row[eng_idx].strip() if eng_idx < len(row) else latin
+            if not latin and eng:
+                latin = eng
+            entry = {"ta2Code": code, "latin": latin, "english": eng}
+            for cand in (latin, eng):
+                if cand:
+                    k = re.sub(r"[^a-z0-9]", "", cand.lower())
+                    if k and k not in ta2_lookup:
+                        ta2_lookup[k] = entry
 
 SYSTEM_RULES = [
-    ("skeletal",       ["skeletal", "bone", "bones", "skeleton", "skull", "cranium", "vertebra", "rib", "thoracic cage"]),
+    ("skeletal",       ["skeletal", "bone", "bones", "skeleton", "skull", "cranium", "vertebra", "rib", "thoracic cage", "ossa"]),
     ("joints",         ["joint", "joints", "articular", "ligament", "cartilage", "bursa", "meniscus", "synovial"]),
-    ("muscular",       ["muscular", "muscle", "muscles", "tendon", "aponeurosis", "fascia"]),
-    ("cardiovascular", ["cardiovascular", "heart", "artery", "arteries", "vein", "veins", "vascular", "aorta", "lymph", "coronar", "atrium", "ventric"]),
-    ("nervous",        ["nervous", "nerve", "nerves", "brain", "encephal", "spinal", "plexus", "sense", "eye", "ear"]),
+    ("muscular",       ["muscular", "muscle", "muscles", "tendon", "aponeurosis", "fascia", "muscul"]),
+    ("cardiovascular", ["cardiovascular", "heart", "artery", "arteries", "arteria", "vein", "veins", "vena", "vascular", "aorta", "lymph", "coronar", "atrium", "ventric", "sinus"]),
+    ("nervous",        ["nervous", "nerve", "nerves", "nervus", "brain", "encephal", "spinal", "plexus", "sense", "eye", "ear", "gangli"]),
     ("visceral",       ["visceral", "viscera", "digestive", "respiratory", "urinary", "renal", "reproductive", "endocrine", "lung", "liver", "stomach", "intestine", "kidney"]),
     ("integumentary",  ["integument", "skin", "region", "surface", "hair", "nail"])
 ]
 
 SYSTEM_META = {
-    "skeletal":       {"name": "İskelet Sistemi", "latin": "Systema skeletale", "color": "#dfd4be", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "joints":         {"name": "Eklemler ve Bağlar", "latin": "Systema articulare", "color": "#b8c7d9", "defaultVisible": False, "defaultOpacity": 1.0},
-    "muscular":       {"name": "Kas Sistemi", "latin": "Systema musculare", "color": "#a84444", "defaultVisible": False, "defaultOpacity": 1.0},
-    "cardiovascular": {"name": "Dolaşım ve Lenfatik", "latin": "Systema cardiovasculare", "color": "#c93b3b", "defaultVisible": False, "defaultOpacity": 1.0},
-    "nervous":        {"name": "Sinir Sistemi ve Duyu", "latin": "Systema nervosum", "color": "#d4b34e", "defaultVisible": False, "defaultOpacity": 1.0},
-    "visceral":       {"name": "İç Organlar (Vissera)", "latin": "Viscera (Splanchnologia)", "color": "#c27b60", "defaultVisible": False, "defaultOpacity": 1.0},
-    "integumentary":  {"name": "Dış Yüzey (Deri)", "latin": "Integumentum commune", "color": "#c9a892", "defaultVisible": False, "defaultOpacity": 0.25}
+    "skeletal":       {"name": "Systema skeletale",       "tr": "İskelet Sistemi",      "color": "#e5dac3", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "joints":         {"name": "Systema articulare",      "tr": "Eklemler ve Bağlar",   "color": "#93c5fd", "defaultVisible": False, "defaultOpacity": 1.0},
+    "muscular":       {"name": "Systema musculare",       "tr": "Kas Sistemi",          "color": "#9f3535", "defaultVisible": False, "defaultOpacity": 1.0},
+    "cardiovascular": {"name": "Systema cardiovasculare", "tr": "Dolaşım ve Lenfatik",  "color": "#d92626", "defaultVisible": False, "defaultOpacity": 1.0},
+    "nervous":        {"name": "Systema nervosum",        "tr": "Sinir Sistemi",        "color": "#eab308", "defaultVisible": False, "defaultOpacity": 1.0},
+    "visceral":       {"name": "Viscera",                 "tr": "İç Organlar",          "color": "#c27b60", "defaultVisible": False, "defaultOpacity": 1.0},
+    "integumentary":  {"name": "Integumentum commune",    "tr": "Dış Yüzey (Deri)",     "color": "#c9a892", "defaultVisible": False, "defaultOpacity": 0.25}
 }
 
 def classify_object(obj):
@@ -68,14 +85,34 @@ def classify_object(obj):
             return sys_id
     return "visceral"
 
+def classify_subtype(sys_id, name_str, region_str):
+    txt = (name_str + " " + region_str).lower()
+    if any(k in txt for k in ("lymph", "nodi ", "nodus ", "ductus thoracicus", "cisterna chyli", "spleen", "thymus")):
+        return "lymph"
+    if any(k in txt for k in ("vein", "vena ", "venae", "venous", "venosus", "sinus ", "jugular", "saphen", "cava")):
+        return "vein"
+    if any(k in txt for k in ("artery", "arteria", "arteriae", "aorta", "carotid", "coronar", "truncus pulmonalis", "arterios")):
+        return "artery"
+    if any(k in txt for k in ("heart", "cor ", "atrium", "ventric", "myocard", "pericard")):
+        return "heart"
+    if sys_id == "nervous" or any(k in txt for k in ("nerve", "nervus", "plexus", "gangli", "brain", "cerebr", "cerebell", "spinal")):
+        return "nerve"
+    if sys_id == "joints" or any(k in txt for k in ("ligament", "cartilag", "menisc", "discus", "bursa", "capsul")):
+        return "ligament"
+    if sys_id == "muscular":
+        return "muscle"
+    if sys_id == "skeletal":
+        return "bone"
+    return "viscera"
+
 def clean_name(raw_name):
     side = ""
     name = raw_name.strip()
     name = re.sub(r"^(Label[-_\s]*|Text[-_\s]*)", "", name, flags=re.IGNORECASE)
     if name.endswith(".r") or name.endswith("_r"):
-        side = " (Sağ)"; name = name[:-2]
+        side = " (Dexter)"; name = name[:-2]
     elif name.endswith(".l") or name.endswith("_l"):
-        side = " (Sol)"; name = name[:-2]
+        side = " (Sinister)"; name = name[:-2]
     name = re.sub(r"\.\d{3}$", "", name)
     name = name.replace("_", " ").strip()
     return (name + side).strip(), name.strip()
@@ -91,7 +128,6 @@ for obj in bpy.context.view_layer.objects:
     region_str = " > ".join(col_path) if col_path else sys_id
     lower_n = obj.name.lower()
 
-    # 1. Capture 3D anatomical landmarks (Labels / Text / Empties like Ostium sinus coronarii, Foramina, Sulci)
     is_label_obj = obj.type in ("FONT", "EMPTY") or "label" in lower_n or lower_n.startswith("text")
     if is_label_obj:
         raw_txt = obj.name
@@ -105,16 +141,16 @@ for obj in bpy.context.view_layer.objects:
         disp, base = clean_name(raw_txt)
         if len(base) >= 3 and not base.lower().startswith(("camera", "light", "lamp", "line", "arrow")):
             loc = obj.matrix_world.translation
-            # Blender Z-up -> glTF Y-up: (x, z, -y)
             pos = [round(float(loc.x), 4), round(float(loc.z), 4), round(float(-loc.y), 4)]
             dedup = (disp.lower(), round(pos[0], 2), round(pos[1], 2), round(pos[2], 2))
             if dedup not in seen_landmarks:
                 seen_landmarks.add(dedup)
                 key = re.sub(r"[^a-z0-9]", "", base.lower())
                 ta2_info = ta2_lookup.get(key, {})
+                latin_name = ta2_info.get("latin", disp)
                 landmarks.append({
+                    "latin": latin_name,
                     "name": disp,
-                    "latin": ta2_info.get("latin", base),
                     "ta2": ta2_info.get("ta2Code", ""),
                     "system": sys_id,
                     "region": region_str,
@@ -124,7 +160,7 @@ for obj in bpy.context.view_layer.objects:
 
     if obj.type not in ("MESH", "CURVE", "SURFACE"):
         continue
-    if "line" in lower_n and not any(k in lower_n for k in ("arter", "vein", "vena", "nerv", "aorta", "trunk", "plexus", "branch", "ramus")):
+    if "line" in lower_n and not any(k in lower_n for k in ("arter", "vein", "vena", "nerv", "aorta", "trunk", "plexus", "branch", "ramus", "lymph")):
         continue
     if obj.type == "MESH" and len(obj.data.vertices) < 3:
         continue
@@ -132,20 +168,24 @@ for obj in bpy.context.view_layer.objects:
     disp, base = clean_name(obj.name)
     key = re.sub(r"[^a-z0-9]", "", base.lower())
     ta2_info = ta2_lookup.get(key, {})
+    latin_name = ta2_info.get("latin", disp)
+    subtype = classify_subtype(sys_id, latin_name + " " + disp, region_str)
 
     obj["anat_system"] = sys_id
+    obj["anat_subtype"] = subtype
+    obj["anat_latin"] = latin_name
     obj["anat_name"] = disp
-    obj["anat_latin"] = ta2_info.get("latin", base)
     obj["anat_ta2"] = ta2_info.get("ta2Code", "")
     obj["anat_region"] = region_str
 
     by_system[sys_id].append(obj)
     manifest_structures.append({
         "meshName": obj.name,
+        "latin": latin_name,
         "name": disp,
-        "latin": obj["anat_latin"],
         "ta2": obj["anat_ta2"],
         "system": sys_id,
+        "subtype": subtype,
         "region": region_str
     })
 
@@ -153,7 +193,7 @@ exported_systems = []
 for sys_id, objs in by_system.items():
     if not objs:
         continue
-    # Convert CURVE/SURFACE (arteries, veins, nerves) to MESH before glTF export
+
     curves = [o for o in objs if o.type in ("CURVE", "SURFACE") and o.name in bpy.context.view_layer.objects]
     if curves:
         bpy.ops.object.select_all(action="DESELECT")
@@ -165,7 +205,7 @@ for sys_id, objs in by_system.items():
         try:
             bpy.ops.object.convert(target="MESH")
         except Exception as e:
-            print(f"[Warn] Curve convert hatasi ({sys_id}):", e)
+            print(f"[Warn] Curve convert ({sys_id}):", e)
 
     bpy.ops.object.select_all(action="DESELECT")
     for o in objs:

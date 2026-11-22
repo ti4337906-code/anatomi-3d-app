@@ -1,4 +1,4 @@
-name: Build Web (GitHub Pages) & Offline Android APK
+name: Build Verified Offline Android APK (Z-Anatomy TA2)
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: public/models
-          key: z-anatomy-glb-v5-curves-${{ hashFiles('scripts/export_z_anatomy.py') }}
+          key: z-anatomy-glb-v6-ta2-${{ hashFiles('scripts/export_z_anatomy.py') }}
 
       - name: Install Blender (Headless)
         if: steps.cache-models.outputs.cache-hit != 'true'
@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y blender python3-numpy unzip git
 
-      - name: Download Z-Anatomy official dataset & export GLB layers
+      - name: Download Z-Anatomy official dataset & export GLB + TA2 landmarks
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
           mkdir -p assets_source public/models
@@ -37,8 +37,20 @@ jobs:
           BLEND_FILE=$(find assets_source/extracted -name "*.blend" | head -n 1)
           cp assets_source/repo/TA2.csv assets_source/TA2.csv
           blender -b "$BLEND_FILE" --python-exit-code 1 -P scripts/export_z_anatomy.py -- --ta2 assets_source/TA2.csv --out public/models
-          test -f public/models/manifest.json
           ls -lh public/models
+
+      - name: Verify anatomical export integrity
+        run: |
+          python3 - << 'PY'
+          import json
+          m = json.load(open("public/models/manifest.json", encoding="utf-8"))
+          l = json.load(open("public/models/landmarks.json", encoding="utf-8"))
+          assert m["totalStructures"] >= 2000, f"Yetersiz yapi sayisi: {m['totalStructures']}"
+          assert len(l) >= 500, f"Yetersiz landmark sayisi: {len(l)}"
+          cv = next((s for s in m["systems"] if s["id"] == "cardiovascular"), None)
+          assert cv and cv["meshCount"] >= 200, f"Damar/kalp eksik: {cv}"
+          print(f"VERIFIED: {m['totalStructures']} structures, {len(l)} landmarks, cardiovascular={cv['meshCount']}")
+          PY
 
       - name: Upload models artifact for build jobs
         uses: actions/upload-artifact@v4
@@ -59,11 +71,11 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies & bundle offline Draco decoder
-        run: |
-          npm install
-          mkdir -p public/draco
-          cp -r node_modules/three/examples/jsm/libs/draco/gltf/* public/draco/
+      - name: Run 3x automated feature verification tests
+        run: node tests/verify_all.mjs
+
+      - name: Install dependencies
+        run: npm install
 
       - name: Download exported Z-Anatomy models
         uses: actions/download-artifact@v4
@@ -71,7 +83,7 @@ jobs:
           name: z-anatomy-models
           path: public/models
 
-      - name: Build Vite bundle (Pages + APK shared dist)
+      - name: Build Vite bundle
         run: npm run build
 
       - name: Upload dist artifact
@@ -132,6 +144,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-apk
-          name: Anatomi 3D Atlas (Tam Çevrimdışı APK)
+          name: Atlas Anatomicus 3D (TA2 • Tam Çevrimdışı APK)
           files: release-apk/Anatomi3D-Atlas.apk
           make_latest: true
