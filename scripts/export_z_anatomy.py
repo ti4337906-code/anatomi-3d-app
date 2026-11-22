@@ -98,7 +98,15 @@ def clean_anatomical_name(raw_name):
 by_system = {k: [] for k in SYSTEM_META.keys()}
 manifest_structures = []
 
-for obj in bpy.data.objects:
+def _unhide_cols(lc):
+    lc.exclude = False
+    lc.hide_viewport = False
+    for ch in lc.children:
+        _unhide_cols(ch)
+
+_unhide_cols(bpy.context.view_layer.layer_collection)
+
+for obj in bpy.context.view_layer.objects:
     if obj.type != "MESH":
         continue
     if obj.hide_render and "label" in obj.name.lower():
@@ -139,6 +147,8 @@ for sys_id, objs in by_system.items():
 
     bpy.ops.object.select_all(action="DESELECT")
     for o in objs:
+        if o.name not in bpy.context.view_layer.objects:
+            continue
         o.hide_set(False)
         o.hide_viewport = False
         o.select_set(True)
