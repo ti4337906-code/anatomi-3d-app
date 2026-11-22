@@ -57,7 +57,18 @@ if os.path.exists(ta2_path):
                     if k and k not in ta2_lookup:
                         ta2_lookup[k] = entry
 
-# Dedicated high-granularity system classification (order matters!)
+# Strict helper / plane / cutter / MRI slice exclusion rules
+HELPER_COL_KEYWORDS = (
+    "cross-section", "cross section", "section", "mri", "slice", "cutter",
+    "boolean", "helper", "reference", "gizmo", "interface", "background",
+    "regions", "surface region", "labels", "annotations", "planes", "camera", "light"
+)
+HELPER_NAME_KEYWORDS = (
+    "plane", "slice", "section", "cutter", "boolean", "box", "cube", "grid",
+    "mri", "gizmo", "panel", "frame", "background", "backdrop", "quad", "rect",
+    "arrow", "pointer", "marker", "profile", "bevel", "camera", "light", "lamp", "empty"
+)
+
 SYSTEM_RULES = [
     ("lymphatica",    ["lymph", "nodi ", "nodus ", "ductus thoracicus", "cisterna chyli", "spleen", "splen", "thymus", "tonsil"]),
     ("venae",         ["vein", "vena ", "venae", "venous", "venosus", "jugular", "saphen", "cava", "azygos", "portal", "sinus coronarius", "sinus sagittalis", "sinus transversus"]),
@@ -68,22 +79,20 @@ SYSTEM_RULES = [
     ("nervous",       ["nervous", "nerve", "nerves", "nervus", "brain", "encephal", "cerebr", "cerebell", "spinal", "plexus", "sense", "eye", "ear", "gangli", "medulla oblongata", "pons", "thalamus"]),
     ("skeletal",      ["skeletal", "bone", "bones", "skeleton", "skull", "cranium", "vertebra", "rib", "costa", "sternum", "femur", "tibia", "fibula", "humerus", "radius", "ulna", "pelvis", "scapula", "clavic", "mandib", "maxilla", "ossa"]),
     ("joints",        ["joint", "joints", "articular", "ligament", "cartilage", "bursa", "meniscus", "synovial", "discus", "capsule"]),
-    ("muscular",      ["muscular", "muscle", "muscles", "tendon", "aponeurosis", "fascia", "muscul", "diaphragm"]),
-    ("integumentary", ["integument", "skin", "region", "surface", "hair", "nail"])
+    ("muscular",      ["muscular", "muscle", "muscles", "tendon", "aponeurosis", "fascia", "muscul", "diaphragm"])
 ]
 
 SYSTEM_META = {
-    "arteriae":      {"name": "Cor et Arteriae",            "tr": "Kalp ve Arteriyel Ağaç",   "color": "#d92626", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "venae":         {"name": "Venae",                      "tr": "Venöz Sistem",             "color": "#1d4ed8", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "lymphatica":    {"name": "Systema lymphoideum",        "tr": "Lenfatik Sistem",          "color": "#16a34a", "defaultVisible": False, "defaultOpacity": 1.0},
-    "respiratory":   {"name": "Systema respiratorium",      "tr": "Solunum Sistemi",          "color": "#d9778b", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "digestive":     {"name": "Systema digestorium",        "tr": "Sindirim Sistemi",         "color": "#c97a4b", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "urogenital":    {"name": "Systema urinarium",          "tr": "Üriner ve Endokrin",       "color": "#9d4edd", "defaultVisible": False, "defaultOpacity": 1.0},
-    "skeletal":      {"name": "Systema skeletale",          "tr": "İskelet Sistemi",          "color": "#e5dac3", "defaultVisible": True,  "defaultOpacity": 0.45},
-    "joints":        {"name": "Systema articulare",         "tr": "Eklemler ve Bağlar",       "color": "#93c5fd", "defaultVisible": False, "defaultOpacity": 1.0},
-    "muscular":      {"name": "Systema musculare",          "tr": "Kas Sistemi",              "color": "#9f3535", "defaultVisible": False, "defaultOpacity": 1.0},
-    "nervous":       {"name": "Systema nervosum",           "tr": "Sinir Sistemi",            "color": "#eab308", "defaultVisible": False, "defaultOpacity": 1.0},
-    "integumentary": {"name": "Integumentum commune",       "tr": "Dış Yüzey (Deri)",         "color": "#c9a892", "defaultVisible": False, "defaultOpacity": 0.22}
+    "arteriae":    {"name": "Cor et Arteriae",       "tr": "Kalp ve Arteriyel Ağaç", "color": "#d92626", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "venae":       {"name": "Venae",                 "tr": "Venöz Sistem",           "color": "#1d4ed8", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "lymphatica":  {"name": "Systema lymphoideum",   "tr": "Lenfatik Sistem",        "color": "#16a34a", "defaultVisible": False, "defaultOpacity": 1.0},
+    "respiratory": {"name": "Systema respiratorium", "tr": "Solunum Sistemi",        "color": "#d9778b", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "digestive":   {"name": "Systema digestorium",   "tr": "Sindirim Sistemi",       "color": "#c97a4b", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "urogenital":  {"name": "Systema urinarium",     "tr": "Üriner ve Endokrin",     "color": "#9d4edd", "defaultVisible": False, "defaultOpacity": 1.0},
+    "skeletal":    {"name": "Systema skeletale",     "tr": "İskelet Sistemi",        "color": "#e5dac3", "defaultVisible": True,  "defaultOpacity": 0.45},
+    "joints":      {"name": "Systema articulare",    "tr": "Eklemler ve Bağlar",     "color": "#93c5fd", "defaultVisible": False, "defaultOpacity": 1.0},
+    "muscular":    {"name": "Systema musculare",     "tr": "Kas Sistemi",            "color": "#9f3535", "defaultVisible": False, "defaultOpacity": 1.0},
+    "nervous":     {"name": "Systema nervosum",      "tr": "Sinir Sistemi",          "color": "#eab308", "defaultVisible": False, "defaultOpacity": 1.0}
 }
 
 def classify_object(obj):
@@ -92,7 +101,7 @@ def classify_object(obj):
     for sys_id, keywords in SYSTEM_RULES:
         if any(kw in combined for kw in keywords):
             return sys_id
-    return "digestive"
+    return None
 
 def classify_subtype(sys_id, name_str, region_str):
     if sys_id == "lymphatica": return "lymph"
@@ -105,6 +114,40 @@ def classify_subtype(sys_id, name_str, region_str):
     if sys_id == "muscular": return "muscle"
     if sys_id == "skeletal": return "bone"
     return "viscera"
+
+def is_flat_plane_or_box(obj):
+    if obj.type != "MESH":
+        return False
+    verts = len(obj.data.vertices)
+    polys = len(obj.data.polygons)
+    if verts < 12 or polys < 6:
+        return True
+    dims = sorted([abs(d) for d in obj.dimensions])
+    # Flat 2D rectangle/plane sheet (thickness ~0 while wide)
+    if dims[0] < 0.0005 and dims[1] > 0.04 and dims[2] > 0.04:
+        return True
+    return False
+
+def is_helper_object(obj, col_names_lower):
+    if obj.display_type in ("WIRE", "BOUNDS"):
+        return True
+    if obj.hide_render:
+        return True
+    lower_n = obj.name.lower()
+    if any(kw in col_names_lower for kw in HELPER_COL_KEYWORDS):
+        return True
+    if any(kw in lower_n for kw in HELPER_NAME_KEYWORDS):
+        return True
+    if "region" in lower_n or "triangle" in lower_n:
+        return True
+    if is_flat_plane_or_box(obj):
+        return True
+    if obj.type == "CURVE":
+        d = obj.data
+        has_volume = (getattr(d, "bevel_depth", 0) > 0) or (getattr(d, "extrude", 0) > 0) or (getattr(d, "bevel_object", None) is not None)
+        if not has_volume:
+            return True
+    return False
 
 def clean_name(raw_name):
     side = ""
@@ -122,13 +165,15 @@ by_system = {k: [] for k in SYSTEM_META.keys()}
 manifest_structures = []
 landmarks = []
 seen_landmarks = set()
+skipped_helpers = 0
 
 for obj in bpy.context.view_layer.objects:
-    sys_id = classify_object(obj)
-    col_path = [c.name for c in obj.users_collection if c.name != "Scene Collection"]
-    region_str = " > ".join(col_path) if col_path else sys_id
+    col_list = [c.name for c in obj.users_collection if c.name != "Scene Collection"]
+    col_names_lower = " ".join(c.lower() for c in col_list)
+    region_str = " > ".join(col_list) if col_list else "Corpus"
     lower_n = obj.name.lower()
 
+    # 1. Capture 3D anatomical landmarks (Labels / Text / Empties)
     is_label_obj = obj.type in ("FONT", "EMPTY") or "label" in lower_n or lower_n.startswith("text")
     if is_label_obj:
         raw_txt = obj.name
@@ -140,7 +185,8 @@ for obj in bpy.context.view_layer.objects:
             except Exception:
                 raw_txt = obj.name
         disp, base = clean_name(raw_txt)
-        if len(base) >= 3 and not base.lower().startswith(("camera", "light", "lamp", "line", "arrow")):
+        if len(base) >= 3 and not any(k in base.lower() for k in ("camera", "light", "lamp", "line", "arrow", "plane", "slice", "cutter", "box")):
+            sys_id = classify_object(obj) or "skeletal"
             loc = obj.matrix_world.translation
             pos = [round(float(loc.x), 4), round(float(loc.z), 4), round(float(-loc.y), 4)]
             dedup = (disp.lower(), round(pos[0], 2), round(pos[1], 2), round(pos[2], 2))
@@ -148,9 +194,8 @@ for obj in bpy.context.view_layer.objects:
                 seen_landmarks.add(dedup)
                 key = re.sub(r"[^a-z0-9]", "", base.lower())
                 ta2_info = ta2_lookup.get(key, {})
-                latin_name = ta2_info.get("latin", disp)
                 landmarks.append({
-                    "latin": latin_name,
+                    "latin": ta2_info.get("latin", disp),
                     "name": disp,
                     "ta2": ta2_info.get("ta2Code", ""),
                     "system": sys_id,
@@ -161,9 +206,15 @@ for obj in bpy.context.view_layer.objects:
 
     if obj.type not in ("MESH", "CURVE", "SURFACE"):
         continue
-    if "line" in lower_n and not any(k in lower_n for k in ("arter", "vein", "vena", "nerv", "aorta", "trunk", "plexus", "branch", "ramus", "lymph", "bronch", "duct")):
+
+    # 2. Strictly reject planes, cutter boxes, regions, MRI slices, profile curves
+    if is_helper_object(obj, col_names_lower):
+        skipped_helpers += 1
         continue
-    if obj.type == "MESH" and len(obj.data.vertices) < 3:
+
+    sys_id = classify_object(obj)
+    if not sys_id:
+        skipped_helpers += 1
         continue
 
     disp, base = clean_name(obj.name)
@@ -209,15 +260,23 @@ for sys_id, objs in by_system.items():
             print(f"[Warn] Curve convert ({sys_id}):", e)
 
     bpy.ops.object.select_all(action="DESELECT")
+    valid_count = 0
     for o in objs:
         if o.name not in bpy.context.view_layer.objects or o.type != "MESH":
+            continue
+        if is_flat_plane_or_box(o):
+            skipped_helpers += 1
             continue
         o.hide_set(False)
         o.hide_viewport = False
         o.select_set(True)
+        valid_count += 1
+
+    if valid_count == 0:
+        continue
 
     out_file = os.path.join(out_dir, f"{sys_id}.glb")
-    print(f"[Z-Anatomy Export] {sys_id}: {len(objs)} meshes -> {out_file}")
+    print(f"[Z-Anatomy Export] {sys_id}: {valid_count} clean meshes -> {out_file}")
     bpy.ops.export_scene.gltf(
         filepath=out_file,
         export_format="GLB",
@@ -233,7 +292,7 @@ for sys_id, objs in by_system.items():
     meta = dict(SYSTEM_META[sys_id])
     meta["id"] = sys_id
     meta["file"] = f"models/{sys_id}.glb"
-    meta["meshCount"] = len(objs)
+    meta["meshCount"] = valid_count
     meta["sizeMB"] = size_mb
     exported_systems.append(meta)
 
@@ -243,6 +302,7 @@ with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as mf:
         "license": "CC BY-SA 4.0",
         "totalStructures": len(manifest_structures),
         "totalLandmarks": len(landmarks),
+        "skippedHelpers": skipped_helpers,
         "systems": exported_systems,
         "structures": manifest_structures
     }, mf, ensure_ascii=False)
@@ -250,4 +310,4 @@ with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as mf:
 with open(os.path.join(out_dir, "landmarks.json"), "w", encoding="utf-8") as lf:
     json.dump(landmarks, lf, ensure_ascii=False)
 
-print(f"[Z-Anatomy Export] Done. Meshes={len(manifest_structures)}, Landmarks={len(landmarks)}")
+print(f"[Z-Anatomy Export] Done. CleanMeshes={len(manifest_structures)}, Landmarks={len(landmarks)}, SkippedHelpers={skipped_helpers}")
