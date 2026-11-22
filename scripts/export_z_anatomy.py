@@ -1,13 +1,3 @@
-"""
-Headless Blender Python script to export Z-Anatomy (Startup.blend) into
-system-layered, Draco-compressed GLB files with Terminologia Anatomica (TA2)
-metadata preserved on every mesh.
-
-Usage:
-  blender -b assets_source/Startup.blend -P scripts/export_z_anatomy.py -- \
-    --ta2 assets_source/TA2.csv \
-    --out public/models
-"""
 import csv
 import json
 import os
@@ -15,13 +5,8 @@ import re
 import sys
 import bpy
 
-# Parse CLI args after '--'
 argv = sys.argv
-if "--" in argv:
-    argv = argv[argv.index("--") + 1:]
-else:
-    argv = []
-
+argv = argv[argv.index("--") + 1:] if "--" in argv else []
 ta2_path = "assets_source/TA2.csv"
 out_dir = "public/models"
 for i, arg in enumerate(argv):
@@ -32,72 +17,6 @@ for i, arg in enumerate(argv):
 
 os.makedirs(out_dir, exist_ok=True)
 
-# 1. Load TA2.csv lookup (clean name -> Latin/TA2 metadata)
-ta2_lookup = {}
-if os.path.exists(ta2_path):
-    with open(ta2_path, "r", encoding="utf-8", errors="replace") as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        for row in reader:
-            if not row:
-                continue
-            joined = [c.strip() for c in row if c.strip()]
-            if len(joined) >= 2:
-                key = re.sub(r"[^a-z0-9]", "", joined[1].lower())
-                ta2_lookup[key] = {
-                    "ta2Code": joined[0] if len(joined) > 0 else "",
-                    "latin": joined[1] if len(joined) > 1 else "",
-                    "english": joined[2] if len(joined) > 2 else joined[1]
-                }
-
-# 2. System classification rules based on Z-Anatomy collection names
-SYSTEM_RULES = [
-    ("skeletal",       ["skeletal", "bone", "bones", "skeleton", "skull", "cranium", "vertebra", "rib", "thoracic cage"]),
-    ("joints",         ["joint", "joints", "articular", "ligament", "cartilage", "bursa", "meniscus", "synovial"]),
-    ("muscular",       ["muscular", "muscle", "muscles", "tendon", "aponeurosis", "fascia"]),
-    ("cardiovascular", ["cardiovascular", "heart", "artery", "arteries", "vein", "veins", "vascular", "aorta", "lymph"]),
-    ("nervous",        ["nervous", "nerve", "nerves", "brain", "encephal", "spinal", "plexus", "sense", "eye", "ear"]),
-    ("visceral",       ["visceral", "viscera", "digestive", "respiratory", "urinary", "renal", "reproductive", "endocrine", "lung", "liver", "stomach", "intestine", "kidney"]),
-    ("integumentary",  ["integument", "skin", "region", "surface", "hair", "nail"])
-]
-
-SYSTEM_META = {
-    "skeletal":       {"name": "İskelet Sistemi", "latin": "Systema skeletale", "color": "#e6dcc8", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "joints":         {"name": "Eklemler ve Bağlar", "latin": "Systema articulare", "color": "#93c5fd", "defaultVisible": True,  "defaultOpacity": 0.95},
-    "muscular":       {"name": "Kas Sistemi", "latin": "Systema musculare", "color": "#b83c3c", "defaultVisible": False, "defaultOpacity": 0.85},
-    "cardiovascular": {"name": "Dolaşım ve Lenfatik", "latin": "Systema cardiovasculare", "color": "#dc2626", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "nervous":        {"name": "Sinir Sistemi ve Duyu", "latin": "Systema nervosum", "color": "#eab308", "defaultVisible": True,  "defaultOpacity": 1.0},
-    "visceral":       {"name": "İç Organlar (Vissera)", "latin": "Viscera (Splanchnologia)", "color": "#d97757", "defaultVisible": True,  "defaultOpacity": 0.95},
-    "integumentary":  {"name": "Dış Yüzey (Deri)", "latin": "Integumentum commune", "color": "#60a5fa", "defaultVisible": False, "defaultOpacity": 0.16}
-}
-
-def classify_object(obj):
-    col_names = " ".join(c.name.lower() for c in obj.users_collection)
-    obj_name = obj.name.lower()
-    combined = col_names + " " + obj_name
-    for sys_id, keywords in SYSTEM_RULES:
-        if any(kw in combined for kw in keywords):
-            return sys_id
-    return "visceral"
-
-def clean_anatomical_name(raw_name):
-    # Strip Blender duplicate suffixes like .001, .l, .r while preserving side tag
-    side = ""
-    name = raw_name.strip()
-    if name.endswith(".r") or name.endswith("_r"):
-        side = " (Sağ)"
-        name = name[:-2]
-    elif name.endswith(".l") or name.endswith("_l"):
-        side = " (Sol)"
-        name = name[:-2]
-    name = re.sub(r"\.\d{3}$", "", name)
-    name = name.replace("_", " ").strip()
-    return name + side, name
-
-# 3. Group all real MESH objects (skip labels, text, cameras, empties, curves)
-by_system = {k: [] for k in SYSTEM_META.keys()}
-manifest_structures = []
-
 def _unhide_cols(lc):
     lc.exclude = False
     lc.hide_viewport = False
@@ -106,45 +25,123 @@ def _unhide_cols(lc):
 
 _unhide_cols(bpy.context.view_layer.layer_collection)
 
+ta2_lookup = {}
+if os.path.exists(ta2_path):
+    with open(ta2_path, "r", encoding="utf-8", errors="replace") as f:
+        reader = csv.reader(f)
+        next(reader, None)
+        for row in reader:
+            joined = [c.strip() for c in row if c.strip()]
+            if len(joined) >= 2:
+                key = re.sub(r"[^a-z0-9]", "", joined[1].lower())
+                ta2_lookup[key] = {
+                    "ta2Code": joined[0],
+                    "latin": joined[1],
+                    "english": joined[2] if len(joined) > 2 else joined[1]
+                }
+
+SYSTEM_RULES = [
+    ("skeletal",       ["skeletal", "bone", "bones", "skeleton", "skull", "cranium", "vertebra", "rib", "thoracic cage"]),
+    ("joints",         ["joint", "joints", "articular", "ligament", "cartilage", "bursa", "meniscus", "synovial"]),
+    ("muscular",       ["muscular", "muscle", "muscles", "tendon", "aponeurosis", "fascia"]),
+    ("cardiovascular", ["cardiovascular", "heart", "artery", "arteries", "vein", "veins", "vascular", "aorta", "lymph", "coronar", "atrium", "ventric"]),
+    ("nervous",        ["nervous", "nerve", "nerves", "brain", "encephal", "spinal", "plexus", "sense", "eye", "ear"]),
+    ("visceral",       ["visceral", "viscera", "digestive", "respiratory", "urinary", "renal", "reproductive", "endocrine", "lung", "liver", "stomach", "intestine", "kidney"]),
+    ("integumentary",  ["integument", "skin", "region", "surface", "hair", "nail"])
+]
+
+SYSTEM_META = {
+    "skeletal":       {"name": "İskelet Sistemi", "latin": "Systema skeletale", "color": "#dfd4be", "defaultVisible": True,  "defaultOpacity": 1.0},
+    "joints":         {"name": "Eklemler ve Bağlar", "latin": "Systema articulare", "color": "#b8c7d9", "defaultVisible": False, "defaultOpacity": 1.0},
+    "muscular":       {"name": "Kas Sistemi", "latin": "Systema musculare", "color": "#a84444", "defaultVisible": False, "defaultOpacity": 1.0},
+    "cardiovascular": {"name": "Dolaşım ve Lenfatik", "latin": "Systema cardiovasculare", "color": "#c93b3b", "defaultVisible": False, "defaultOpacity": 1.0},
+    "nervous":        {"name": "Sinir Sistemi ve Duyu", "latin": "Systema nervosum", "color": "#d4b34e", "defaultVisible": False, "defaultOpacity": 1.0},
+    "visceral":       {"name": "İç Organlar (Vissera)", "latin": "Viscera (Splanchnologia)", "color": "#c27b60", "defaultVisible": False, "defaultOpacity": 1.0},
+    "integumentary":  {"name": "Dış Yüzey (Deri)", "latin": "Integumentum commune", "color": "#c9a892", "defaultVisible": False, "defaultOpacity": 0.25}
+}
+
+def classify_object(obj):
+    col_names = " ".join(c.name.lower() for c in obj.users_collection)
+    combined = col_names + " " + obj.name.lower()
+    for sys_id, keywords in SYSTEM_RULES:
+        if any(kw in combined for kw in keywords):
+            return sys_id
+    return "visceral"
+
+def clean_name(raw_name):
+    side = ""
+    name = raw_name.strip()
+    name = re.sub(r"^(Label[-_\s]*|Text[-_\s]*)", "", name, flags=re.IGNORECASE)
+    if name.endswith(".r") or name.endswith("_r"):
+        side = " (Sağ)"; name = name[:-2]
+    elif name.endswith(".l") or name.endswith("_l"):
+        side = " (Sol)"; name = name[:-2]
+    name = re.sub(r"\.\d{3}$", "", name)
+    name = name.replace("_", " ").strip()
+    return (name + side).strip(), name.strip()
+
+by_system = {k: [] for k in SYSTEM_META.keys()}
+manifest_structures = []
+landmarks = []
+seen_landmarks = set()
+
 for obj in bpy.context.view_layer.objects:
-    if obj.type != "MESH":
-        continue
-    if obj.hide_render and "label" in obj.name.lower():
-        continue
-    if "label" in obj.name.lower() or "line" in obj.name.lower() or obj.name.startswith("Text"):
-        continue
-    if len(obj.data.vertices) < 3:
-        continue
-
     sys_id = classify_object(obj)
-    display_name, base_name = clean_anatomical_name(obj.name)
     col_path = [c.name for c in obj.users_collection if c.name != "Scene Collection"]
+    region_str = " > ".join(col_path) if col_path else sys_id
+    lower_n = obj.name.lower()
 
-    lookup_key = re.sub(r"[^a-z0-9]", "", base_name.lower())
-    ta2_info = ta2_lookup.get(lookup_key, {})
+    # 1. Capture 3D anatomical landmarks (Labels / Text / Empties like Ostium sinus coronarii, Foramina, Sulci)
+    is_label_obj = obj.type in ("FONT", "EMPTY") or "label" in lower_n or lower_n.startswith("text")
+    if is_label_obj:
+        raw_txt = obj.data.body if (obj.type == "FONT" and getattr(obj.data, "body", "")) else obj.name
+        disp, base = clean_name(raw_txt)
+        if len(base) >= 3 and not base.lower().startswith(("camera", "light", "lamp", "line", "arrow")):
+            loc = obj.matrix_world.translation
+            # Blender Z-up -> glTF Y-up: (x, z, -y)
+            pos = [round(float(loc.x), 4), round(float(loc.z), 4), round(float(-loc.y), 4)]
+            dedup = (disp.lower(), round(pos[0], 2), round(pos[1], 2), round(pos[2], 2))
+            if dedup not in seen_landmarks:
+                seen_landmarks.add(dedup)
+                key = re.sub(r"[^a-z0-9]", "", base.lower())
+                ta2_info = ta2_lookup.get(key, {})
+                landmarks.append({
+                    "name": disp,
+                    "latin": ta2_info.get("latin", base),
+                    "ta2": ta2_info.get("ta2Code", ""),
+                    "system": sys_id,
+                    "region": region_str,
+                    "pos": pos
+                })
+        continue
+
+    if obj.type != "MESH" or "line" in lower_n or len(obj.data.vertices) < 3:
+        continue
+
+    disp, base = clean_name(obj.name)
+    key = re.sub(r"[^a-z0-9]", "", base.lower())
+    ta2_info = ta2_lookup.get(key, {})
 
     obj["anat_system"] = sys_id
-    obj["anat_name"] = display_name
-    obj["anat_latin"] = ta2_info.get("latin", base_name)
+    obj["anat_name"] = disp
+    obj["anat_latin"] = ta2_info.get("latin", base)
     obj["anat_ta2"] = ta2_info.get("ta2Code", "")
-    obj["anat_region"] = " > ".join(col_path) if col_path else sys_id
+    obj["anat_region"] = region_str
 
     by_system[sys_id].append(obj)
     manifest_structures.append({
         "meshName": obj.name,
-        "name": display_name,
+        "name": disp,
         "latin": obj["anat_latin"],
         "ta2": obj["anat_ta2"],
         "system": sys_id,
-        "region": obj["anat_region"]
+        "region": region_str
     })
 
-# 4. Export each system to a separate Draco-compressed GLB (high detail preserved)
 exported_systems = []
 for sys_id, objs in by_system.items():
     if not objs:
         continue
-
     bpy.ops.object.select_all(action="DESELECT")
     for o in objs:
         if o.name not in bpy.context.view_layer.objects:
@@ -155,7 +152,6 @@ for sys_id, objs in by_system.items():
 
     out_file = os.path.join(out_dir, f"{sys_id}.glb")
     print(f"[Z-Anatomy Export] {sys_id}: {len(objs)} meshes -> {out_file}")
-
     bpy.ops.export_scene.gltf(
         filepath=out_file,
         export_format="GLB",
@@ -164,9 +160,8 @@ for sys_id, objs in by_system.items():
         export_extras=True,
         export_yup=True,
         export_materials="EXPORT",
-        export_draco_mesh_compression_enable=False,
+        export_draco_mesh_compression_enable=False
     )
-
     size_mb = round(os.path.getsize(out_file) / (1024 * 1024), 2)
     meta = dict(SYSTEM_META[sys_id])
     meta["id"] = sys_id
@@ -175,15 +170,17 @@ for sys_id, objs in by_system.items():
     meta["sizeMB"] = size_mb
     exported_systems.append(meta)
 
-manifest = {
-    "source": "Z-Anatomy (Models-of-human-anatomy) / BodyParts3D (DBCLS)",
-    "license": "CC BY-SA 4.0",
-    "totalStructures": len(manifest_structures),
-    "systems": exported_systems,
-    "structures": manifest_structures
-}
-
 with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as mf:
-    json.dump(manifest, mf, ensure_ascii=False)
+    json.dump({
+        "source": "Z-Anatomy / BodyParts3D (DBCLS)",
+        "license": "CC BY-SA 4.0",
+        "totalStructures": len(manifest_structures),
+        "totalLandmarks": len(landmarks),
+        "systems": exported_systems,
+        "structures": manifest_structures
+    }, mf, ensure_ascii=False)
 
-print(f"[Z-Anatomy Export] Done. Total meshes exported: {len(manifest_structures)}")
+with open(os.path.join(out_dir, "landmarks.json"), "w", encoding="utf-8") as lf:
+    json.dump(landmarks, lf, ensure_ascii=False)
+
+print(f"[Z-Anatomy Export] Done. Meshes={len(manifest_structures)}, Landmarks={len(landmarks)}")

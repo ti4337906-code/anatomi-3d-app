@@ -20,7 +20,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: public/models
-          key: z-anatomy-glb-v3-raw-${{ hashFiles('scripts/export_z_anatomy.py') }}
+          key: z-anatomy-glb-v4-landmarks-${{ hashFiles('scripts/export_z_anatomy.py') }}
 
       - name: Install Blender (Headless)
         if: steps.cache-models.outputs.cache-hit != 'true'

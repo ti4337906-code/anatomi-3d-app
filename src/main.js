@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { findClinicalNote } from './anatomy-tr.js';
 
 const viewport = document.getElementById('viewport');
+const pinsLayer = document.getElementById('pinsLayer');
 const statusChip = document.getElementById('statusChip');
 const sheet = document.getElementById('sheet');
 const sheetTitle = document.getElementById('sheetTitle');
@@ -11,7 +12,7 @@ const sheetBody = document.getElementById('sheetBody');
 const selectedPill = document.getElementById('selectedPill');
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(42, viewport.clientWidth / viewport.clientHeight, 0.01, 200);
+const camera = new THREE.PerspectiveCamera(42, viewport.clientWidth / viewport.clientHeight, 0.005, 200);
 camera.position.set(0, 1.0, 2.8);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
@@ -20,24 +21,27 @@ renderer.setSize(viewport.clientWidth, viewport.clientHeight);
 renderer.localClippingEnabled = true;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.18;
+renderer.toneMappingExposure = 1.1;
 viewport.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.target.set(0, 0.9, 0);
-controls.minDistance = 0.15;
+controls.minDistance = 0.08;
 controls.maxDistance = 12;
 
-// Guclu medikal isiklandirma (her acidan net)
-scene.add(new THREE.HemisphereLight(0xe0f2fe, 0x1e293b, 1.15));
-const dir1 = new THREE.DirectionalLight(0xffffff, 1.25);
-dir1.position.set(4, 6, 6);
-scene.add(dir1);
-const dir2 = new THREE.DirectionalLight(0x7dd3fc, 0.75);
-dir2.position.set(-5, 3, -5);
-scene.add(dir2);
+// Dogal medikal studyo isigi (gercek anatomik renkleri bozmayan notr beyaz)
+scene.add(new THREE.HemisphereLight(0xffffff, 0x3b4252, 0.95));
+const keyL = new THREE.DirectionalLight(0xfffaf0, 1.15);
+keyL.position.set(4, 6, 6);
+scene.add(keyL);
+const fillL = new THREE.DirectionalLight(0xe2e8f0, 0.55);
+fillL.position.set(-5, 2, 3);
+scene.add(fillL);
+const backL = new THREE.DirectionalLight(0xdbeafe, 0.5);
+backL.position.set(0, 4, -6);
+scene.add(backL);
 
 const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 100);
 const gltfLoader = new GLTFLoader();
@@ -45,18 +49,29 @@ const modelRoot = new THREE.Group();
 scene.add(modelRoot);
 
 let manifest = null;
+let landmarks = [];
 const systemState = {};
 const allStructures = [];
 const meshToRecord = new Map();
 
 let selectedRecord = null;
-let xrayMode = false;
+let activeLandmark = null;
 let isolateMode = false;
+let pinsEnabled = false;
 let sliceEnabled = false;
 let sliceAxis = 'axial';
 let sliceValue = 1.9;
 let activeSheet = null;
 let bodyBounds = { minY: 0, maxY: 1.85, center: new THREE.Vector3(0, 0.92, 0), height: 1.85 };
+
+// 3D marker sphere for focused landmark (e.g. Ostium sinus coronarii)
+const landmarkMarker = new THREE.Mesh(
+  new THREE.SphereGeometry(0.008, 16, 16),
+  new THREE.MeshBasicMaterial({ color: 0xe11d48, depthTest: false })
+);
+landmarkMarker.renderOrder = 999;
+landmarkMarker.visible = false;
+scene.add(landmarkMarker);
 
 function toast(msg) {
   const el = document.getElementById('toast');
@@ -89,24 +104,24 @@ document.querySelectorAll('.nav-btn[data-sheet]').forEach(btn => {
   btn.addEventListener('click', () => openSheet(btn.dataset.sheet));
 });
 
-// =========================================================================
-// MODEL YUKLEME VE OTOMATIK KADRAJ
-// =========================================================================
 async function init() {
   try {
     const res = await fetch('./models/manifest.json');
-    if (!res.ok) throw new Error('manifest.json okunamadı');
+    if (!res.ok) throw new Error('manifest.json bulunamadı');
     manifest = await res.json();
   } catch (e) {
     statusChip.textContent = 'Model bulunamadı';
-    toast('Model manifesti eksik: ' + e.message);
     return;
   }
+
+  try {
+    const lres = await fetch('./models/landmarks.json');
+    if (lres.ok) landmarks = await lres.json();
+  } catch (e) { landmarks = []; }
 
   manifest.systems.forEach((sys, idx) => {
     const g = new THREE.Group();
     modelRoot.add(g);
-    // Hizli ve garanti acilis: ilk olarak iskelet acik, digerleri tek tikla yuklenir
     const isDefault = sys.id === 'skeletal' || idx === 0;
     systemState[sys.id] = {
       meta: sys, group: g, loaded: false, loading: false,
@@ -119,7 +134,7 @@ async function init() {
   await loadSystem(firstSys);
   fitCameraToModel(true);
   refreshMaterials();
-  statusChip.textContent = `${allStructures.length} yapı hazır`;
+  statusChip.textContent = `${allStructures.length} yapı • ${landmarks.length} nokta`;
 }
 
 function loadSystem(sysId) {
@@ -135,9 +150,12 @@ function loadSystem(sysId) {
         const root = gltf.scene;
         root.traverse(obj => {
           if (!obj.isMesh) return;
-          const m = obj.material ? obj.material.clone() : new THREE.MeshStandardMaterial({ color: st.meta.color });
+          const m = obj.material ? obj.material.clone() : new THREE.MeshStandardMaterial({ color: st.meta.color, roughness: 0.55 });
+          // KATI (OPAQUE) baslangic — seffaflik/hayalet goruntu hatasini onler
+          m.transparent = false;
+          m.opacity = 1.0;
+          m.depthWrite = true;
           m.side = THREE.DoubleSide;
-          m.transparent = true;
           m.clippingPlanes = [clipPlane];
           m.userData.baseEmissive = m.emissive ? m.emissive.clone() : new THREE.Color(0x000000);
           obj.material = m;
@@ -152,6 +170,7 @@ function loadSystem(sysId) {
             system: sysId,
             region: ud.anat_region || st.meta.name,
             hidden: false,
+            faded: false,
             mat: m
           };
           allStructures.push(rec);
@@ -160,14 +179,13 @@ function loadSystem(sysId) {
         st.group.add(root);
         st.loaded = true;
         st.loading = false;
-        statusChip.textContent = `${allStructures.length} yapı yüklü`;
+        statusChip.textContent = `${allStructures.length} yapı • ${landmarks.length} nokta`;
         resolve();
       },
       undefined,
       (err) => {
         console.error(err);
         st.loading = false;
-        statusChip.textContent = `Hata: ${sysId}`;
         toast(`${st.meta.name} yüklenemedi`);
         resolve();
       }
@@ -196,9 +214,9 @@ function fitCameraToModel(resetView = false) {
   bodyBounds = { minY: finalBox.min.y, maxY: finalBox.max.y, center, height: size.y || 1.85 };
 
   if (resetView) {
-    const dist = Math.max(size.x, size.y, size.z) * 1.45;
+    const dist = Math.max(size.x, size.y, size.z) * 1.42;
     controls.target.copy(center);
-    camera.position.set(center.x, center.y + 0.05, center.z + dist);
+    camera.position.set(center.x, center.y + 0.04, center.z + dist);
     controls.update();
   }
 }
@@ -211,32 +229,64 @@ function refreshMaterials() {
     if (isolateMode && selectedRecord) vis = isSel;
     rec.mesh.visible = vis;
 
-    let op = sys.opacity;
-    if (xrayMode && !isSel) op = Math.min(op, 0.14);
+    let op = rec.faded ? 0.22 : sys.opacity;
+    if (isSel && !rec.faded) op = 1.0;
+
+    const needsTrans = op < 0.99;
+    if (rec.mat.transparent !== needsTrans) {
+      rec.mat.transparent = needsTrans;
+      rec.mat.needsUpdate = true;
+    }
+    rec.mat.opacity = op;
+    rec.mat.depthWrite = !needsTrans;
+
     if (isSel) {
-      op = 1.0;
-      rec.mat.emissive.setHex(0x00e5ff);
-      rec.mat.emissiveIntensity = 0.65;
+      rec.mat.emissive.setHex(0x3b82f6);
+      rec.mat.emissiveIntensity = 0.45;
     } else {
       rec.mat.emissive.copy(rec.mat.userData.baseEmissive);
       rec.mat.emissiveIntensity = 1.0;
     }
-    rec.mat.opacity = op;
-    rec.mat.depthWrite = op >= 0.85;
   });
 }
 
-// =========================================================================
-// SECIM VE DOKUNMATIK RAYCAST
-// =========================================================================
+// Landmark world coordinate helper (applies same modelRoot transform)
+function getLandmarkWorldPos(lm) {
+  return new THREE.Vector3(lm.pos[0], lm.pos[1], lm.pos[2]).applyMatrix4(modelRoot.matrixWorld);
+}
+
+async function focusLandmark(lm) {
+  // Ensure owning system is loaded and visible
+  const st = systemState[lm.system];
+  if (st) {
+    st.visible = true;
+    if (!st.loaded) await loadSystem(lm.system);
+    fitCameraToModel(false);
+    refreshMaterials();
+  }
+  modelRoot.updateMatrixWorld(true);
+  const wpos = getLandmarkWorldPos(lm);
+  activeLandmark = lm;
+  landmarkMarker.position.copy(wpos);
+  landmarkMarker.visible = true;
+
+  controls.target.copy(wpos);
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  camera.position.copy(wpos).addScaledVector(dir, 0.28);
+  controls.update();
+
+  document.getElementById('pillName').textContent = lm.name;
+  document.getElementById('pillLatin').textContent = `${lm.latin} (Anatomik Nokta)`;
+  selectedPill.classList.remove('hidden');
+  toast(`Odaklandı: ${lm.name}`);
+}
+
+// Raycast Picking
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 let downXY = { x: 0, y: 0 };
 
-renderer.domElement.addEventListener('pointerdown', e => {
-  downXY = { x: e.clientX, y: e.clientY };
-});
-
+renderer.domElement.addEventListener('pointerdown', e => { downXY = { x: e.clientX, y: e.clientY }; });
 renderer.domElement.addEventListener('pointerup', e => {
   if (Math.hypot(e.clientX - downXY.x, e.clientY - downXY.y) > 8) return;
   if (activeSheet) { closeSheet(); return; }
@@ -255,9 +305,12 @@ renderer.domElement.addEventListener('pointerup', e => {
 });
 
 function selectRecord(rec, focus = true) {
+  activeLandmark = null;
+  landmarkMarker.visible = false;
   selectedRecord = rec;
   document.getElementById('pillName').textContent = rec.name;
   document.getElementById('pillLatin').textContent = rec.latin;
+  document.getElementById('btnPillFade').classList.toggle('active', rec.faded);
   selectedPill.classList.remove('hidden');
   refreshMaterials();
   if (focus) focusRecord(rec);
@@ -265,8 +318,11 @@ function selectRecord(rec, focus = true) {
 
 function clearSelection() {
   selectedRecord = null;
+  activeLandmark = null;
+  landmarkMarker.visible = false;
   isolateMode = false;
   document.getElementById('btnPillIsolate').classList.remove('active');
+  document.getElementById('btnPillFade').classList.remove('active');
   selectedPill.classList.add('hidden');
   if (activeSheet === 'detail') closeSheet();
   refreshMaterials();
@@ -278,12 +334,18 @@ function focusRecord(rec) {
   const sz = box.getSize(new THREE.Vector3()).length();
   controls.target.copy(c);
   const dir = camera.position.clone().sub(controls.target).normalize();
-  camera.position.copy(c).addScaledVector(dir, Math.max(0.32, Math.min(2.2, sz * 2.3)));
+  camera.position.copy(c).addScaledVector(dir, Math.max(0.24, Math.min(2.2, sz * 2.2)));
   controls.update();
 }
 
-document.getElementById('btnOpenDetailFromPill').addEventListener('click', () => selectedRecord && openSheet('detail'));
+document.getElementById('btnOpenDetailFromPill').addEventListener('click', () => (selectedRecord || activeLandmark) && openSheet('detail'));
 document.getElementById('btnPillClose').addEventListener('click', clearSelection);
+document.getElementById('btnPillFade').addEventListener('click', (e) => {
+  if (!selectedRecord) return;
+  selectedRecord.faded = !selectedRecord.faded;
+  e.target.classList.toggle('active', selectedRecord.faded);
+  refreshMaterials();
+});
 document.getElementById('btnPillHide').addEventListener('click', () => {
   if (!selectedRecord) return;
   selectedRecord.hidden = true;
@@ -297,23 +359,20 @@ document.getElementById('btnPillIsolate').addEventListener('click', (e) => {
   refreshMaterials();
 });
 
-// =========================================================================
-// ALT CEKMECE ICERIKLERI
-// =========================================================================
+// Bottom Sheets
 function renderSystemsSheet() {
   sheetTitle.textContent = 'Anatomik Sistemler';
   sheetBody.innerHTML = '';
 
-  const hiddenCount = allStructures.filter(r => r.hidden).length;
-  if (hiddenCount > 0) {
+  const modCount = allStructures.filter(r => r.hidden || r.faded).length;
+  if (modCount > 0) {
     const restoreBtn = document.createElement('button');
     restoreBtn.className = 'item-btn';
-    restoreBtn.innerHTML = `<strong>Gizli Yapıları Geri Getir (${hiddenCount})</strong>`;
+    restoreBtn.innerHTML = `<strong>Gizli / Saydam Yapıları Sıfırla (${modCount})</strong>`;
     restoreBtn.onclick = () => {
-      allStructures.forEach(r => { r.hidden = false; });
+      allStructures.forEach(r => { r.hidden = false; r.faded = false; });
       refreshMaterials();
       renderSystemsSheet();
-      toast('Tüm gizli yapılar açıldı');
     };
     sheetBody.appendChild(restoreBtn);
   }
@@ -335,7 +394,7 @@ function renderSystemsSheet() {
       </div>
       <div class="slider-row">
         <span>Saydamlık</span>
-        <input type="range" min="0.05" max="1" step="0.05" value="${st.opacity}" />
+        <input type="range" min="0.1" max="1" step="0.05" value="${st.opacity}" />
         <span>${Math.round(st.opacity * 100)}%</span>
       </div>
     `;
@@ -362,29 +421,44 @@ function renderSystemsSheet() {
 }
 
 function renderSearchSheet() {
-  sheetTitle.textContent = `Yapı Ara (${allStructures.length} yüklü)`;
-  sheetBody.innerHTML = '<input id="sInput" class="search-box" type="search" placeholder="Kemik, kas, arter, sinir ara..." /><div id="sList"></div>';
+  sheetTitle.textContent = 'Yapı & Anatomik Nokta Ara';
+  sheetBody.innerHTML = '<input id="sInput" class="search-box" type="search" placeholder="Örn: Ostium sinus coronarii, Femur, Aorta..." /><div id="sList"></div>';
   const input = document.getElementById('sInput');
   const list = document.getElementById('sList');
 
   const draw = () => {
     const q = input.value.trim().toLowerCase();
-    const matches = allStructures.filter(r =>
-      !q || r.name.toLowerCase().includes(q) || r.latin.toLowerCase().includes(q) || r.ta2.toLowerCase().includes(q)
-    ).slice(0, 80);
-
     list.innerHTML = '';
-    if (!matches.length) {
-      list.innerHTML = '<div class="sys-meta">Eşleşen yapı yok (önce ilgili sistemi açın).</div>';
-      return;
-    }
-    matches.forEach(rec => {
+
+    // 1. Search Landmarks (Ostium, Foramen, Sulcus, etc.)
+    const lmMatches = landmarks.filter(l =>
+      q.length >= 2 && (l.name.toLowerCase().includes(q) || l.latin.toLowerCase().includes(q) || l.ta2.toLowerCase().includes(q))
+    ).slice(0, 40);
+
+    // 2. Search Loaded Meshes + Manifest structures
+    const meshMatches = allStructures.filter(r =>
+      !q || r.name.toLowerCase().includes(q) || r.latin.toLowerCase().includes(q) || r.ta2.toLowerCase().includes(q)
+    ).slice(0, 50);
+
+    lmMatches.forEach(lm => {
+      const b = document.createElement('button');
+      b.className = 'item-btn';
+      b.innerHTML = `<strong><span class="badge-pin">NOKTA</span>${lm.name}</strong><small>${lm.latin} • ${lm.region}</small>`;
+      b.onclick = async () => { closeSheet(); await focusLandmark(lm); };
+      list.appendChild(b);
+    });
+
+    meshMatches.forEach(rec => {
       const b = document.createElement('button');
       b.className = 'item-btn';
       b.innerHTML = `<strong>${rec.name}</strong><small>${rec.latin}</small>`;
       b.onclick = () => { selectRecord(rec, true); closeSheet(); };
       list.appendChild(b);
     });
+
+    if (!lmMatches.length && !meshMatches.length) {
+      list.innerHTML = '<div class="sys-meta">Sonuç bulunamadı. Diğer sistemleri Sistemler sekmesinden açabilirsiniz.</div>';
+    }
   };
   input.oninput = draw;
   draw();
@@ -395,15 +469,15 @@ function renderCameraSheet() {
   const c = bodyBounds.center;
   const h = bodyBounds.height;
   const views = [
-    ['Ön',      [c.x, c.y, c.z + h * 1.45], [c.x, c.y, c.z]],
-    ['Arka',    [c.x, c.y, c.z - h * 1.45], [c.x, c.y, c.z]],
-    ['Sağ Yan', [c.x - h * 1.45, c.y, c.z], [c.x, c.y, c.z]],
-    ['Sol Yan', [c.x + h * 1.45, c.y, c.z], [c.x, c.y, c.z]],
-    ['Baş',     [c.x, bodyBounds.maxY - h * 0.1, c.z + h * 0.42], [c.x, bodyBounds.maxY - h * 0.1, c.z]],
-    ['Toraks',  [c.x, bodyBounds.maxY - h * 0.3, c.z + h * 0.55], [c.x, bodyBounds.maxY - h * 0.3, c.z]],
-    ['Abdomen', [c.x, bodyBounds.maxY - h * 0.46, c.z + h * 0.55], [c.x, bodyBounds.maxY - h * 0.46, c.z]],
-    ['Pelvis',  [c.x, bodyBounds.maxY - h * 0.56, c.z + h * 0.55], [c.x, bodyBounds.maxY - h * 0.56, c.z]],
-    ['Tam Boy', [c.x, c.y, c.z + h * 1.5], [c.x, c.y, c.z]]
+    ['Ön',      [c.x, c.y, c.z + h * 1.42], [c.x, c.y, c.z]],
+    ['Arka',    [c.x, c.y, c.z - h * 1.42], [c.x, c.y, c.z]],
+    ['Sağ Yan', [c.x - h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
+    ['Sol Yan', [c.x + h * 1.42, c.y, c.z], [c.x, c.y, c.z]],
+    ['Baş',     [c.x, bodyBounds.maxY - h * 0.1, c.z + h * 0.4], [c.x, bodyBounds.maxY - h * 0.1, c.z]],
+    ['Toraks',  [c.x, bodyBounds.maxY - h * 0.3, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.3, c.z]],
+    ['Abdomen', [c.x, bodyBounds.maxY - h * 0.46, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.46, c.z]],
+    ['Pelvis',  [c.x, bodyBounds.maxY - h * 0.56, c.z + h * 0.52], [c.x, bodyBounds.maxY - h * 0.56, c.z]],
+    ['Tam Boy', [c.x, c.y, c.z + h * 1.48], [c.x, c.y, c.z]]
   ];
   sheetBody.innerHTML = '<div class="cam-grid"></div>';
   const grid = sheetBody.querySelector('.cam-grid');
@@ -411,12 +485,7 @@ function renderCameraSheet() {
     const b = document.createElement('button');
     b.className = 'cam-tile';
     b.textContent = label;
-    b.onclick = () => {
-      camera.position.set(...pos);
-      controls.target.set(...tgt);
-      controls.update();
-      closeSheet();
-    };
+    b.onclick = () => { camera.position.set(...pos); controls.target.set(...tgt); controls.update(); closeSheet(); };
     grid.appendChild(b);
   });
 }
@@ -448,52 +517,81 @@ function renderSliceSheet() {
     </button>
   `;
   sheetBody.querySelectorAll('[data-ax]').forEach(b => {
-    b.onclick = () => {
-      sliceAxis = b.dataset.ax;
-      sliceEnabled = true;
-      sliceValue = sliceAxis === 'axial' ? bodyBounds.center.y : 0;
-      updateClip();
-      renderSliceSheet();
-    };
+    b.onclick = () => { sliceAxis = b.dataset.ax; sliceEnabled = true; sliceValue = sliceAxis === 'axial' ? bodyBounds.center.y : 0; updateClip(); renderSliceSheet(); };
   });
-  document.getElementById('slSlice').oninput = (e) => {
-    sliceEnabled = true;
-    sliceValue = parseFloat(e.target.value);
-    updateClip();
-  };
-  document.getElementById('btnToggleSlice').onclick = () => {
-    sliceEnabled = !sliceEnabled;
-    updateClip();
-    renderSliceSheet();
-  };
+  document.getElementById('slSlice').oninput = (e) => { sliceEnabled = true; sliceValue = parseFloat(e.target.value); updateClip(); };
+  document.getElementById('btnToggleSlice').onclick = () => { sliceEnabled = !sliceEnabled; updateClip(); renderSliceSheet(); };
 }
 
 function renderDetailSheet() {
-  if (!selectedRecord) return;
-  sheetTitle.textContent = 'Yapı Detayı';
-  const note = findClinicalNote(selectedRecord.name + ' ' + selectedRecord.latin);
+  const target = selectedRecord || activeLandmark;
+  if (!target) return;
+  sheetTitle.textContent = activeLandmark ? 'Anatomik İşaret Noktası' : 'Yapı Detayı';
+  const note = findClinicalNote(target.name + ' ' + target.latin);
   sheetBody.innerHTML = `
     <div class="detail-card">
-      <p><strong>Adı:</strong> ${selectedRecord.name}</p>
-      <p><strong>Latince / TA2:</strong> ${selectedRecord.latin} ${selectedRecord.ta2 ? '(' + selectedRecord.ta2 + ')' : ''}</p>
-      <p><strong>Bölge:</strong> ${selectedRecord.region}</p>
+      <p><strong>Adı:</strong> ${target.name}</p>
+      <p><strong>Latince / TA2:</strong> ${target.latin} ${target.ta2 ? '(' + target.ta2 + ')' : ''}</p>
+      <p><strong>Bölge:</strong> ${target.region}</p>
       ${note ? `<p><strong>Klinik Not:</strong> ${note}</p>` : ''}
-      <button id="btnDetFocus" class="item-btn" style="margin-top:10px;text-align:center;"><strong>Kamerayı Odakla</strong></button>
+      ${selectedRecord ? '<button id="btnDetFocus" class="item-btn" style="margin-top:10px;text-align:center;"><strong>Kamerayı Odakla</strong></button>' : ''}
     </div>
   `;
-  document.getElementById('btnDetFocus').onclick = () => { focusRecord(selectedRecord); closeSheet(); };
+  const bf = document.getElementById('btnDetFocus');
+  if (bf) bf.onclick = () => { focusRecord(selectedRecord); closeSheet(); };
 }
 
-document.getElementById('btnXray').addEventListener('click', (e) => {
-  xrayMode = !xrayMode;
-  e.target.classList.toggle('active', xrayMode);
-  refreshMaterials();
+// 3D Floating Pins projection (shows nearest 25 landmarks when Pins toggled OR always shows activeLandmark)
+document.getElementById('btnPins').addEventListener('click', (e) => {
+  pinsEnabled = !pinsEnabled;
+  e.target.classList.toggle('active', pinsEnabled);
+  toast(pinsEnabled ? 'Yakın anatomik noktalar açık' : 'Pinler gizlendi');
 });
 
+function updatePinsOverlay() {
+  pinsLayer.innerHTML = '';
+  if (!pinsEnabled && !activeLandmark) return;
+
+  const w = viewport.clientWidth;
+  const h = viewport.clientHeight;
+  const list = [];
+
+  if (activeLandmark) {
+    list.push({ lm: activeLandmark, active: true });
+  }
+  if (pinsEnabled) {
+    const camDist = camera.position.distanceTo(controls.target);
+    const maxR = Math.max(0.25, camDist * 0.7);
+    for (let i = 0; i < landmarks.length; i++) {
+      const lm = landmarks[i];
+      if (!systemState[lm.system] || !systemState[lm.system].visible) continue;
+      const wp = getLandmarkWorldPos(lm);
+      const d = wp.distanceTo(controls.target);
+      if (d <= maxR) list.push({ lm, active: lm === activeLandmark, d, wp });
+    }
+    list.sort((a, b) => (a.d || 0) - (b.d || 0));
+  }
+
+  list.slice(0, 22).forEach(item => {
+    const wp = item.wp || getLandmarkWorldPos(item.lm);
+    const proj = wp.clone().project(camera);
+    if (proj.z > 1) return;
+    const x = (proj.x * 0.5 + 0.5) * w;
+    const y = (-proj.y * 0.5 + 0.5) * h;
+    if (x < 0 || x > w || y < 0 || y > h) return;
+
+    const el = document.createElement('div');
+    el.className = 'pin-tag' + (item.active ? ' active' : '');
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.textContent = item.lm.name;
+    el.onclick = () => focusLandmark(item.lm);
+    pinsLayer.appendChild(el);
+  });
+}
+
 document.getElementById('btnReset').addEventListener('click', () => {
-  allStructures.forEach(r => { r.hidden = false; });
-  xrayMode = false;
-  document.getElementById('btnXray').classList.remove('active');
+  allStructures.forEach(r => { r.hidden = false; r.faded = false; });
   sliceEnabled = false;
   updateClip();
   clearSelection();
@@ -508,10 +606,12 @@ window.addEventListener('resize', () => {
   renderer.setSize(viewport.clientWidth, viewport.clientHeight);
 });
 
+let frameCount = 0;
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
   renderer.render(scene, camera);
+  if ((++frameCount % 3) === 0) updatePinsOverlay();
 }
 animate();
 init();

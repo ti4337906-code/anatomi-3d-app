@@ -8,32 +8,27 @@
 </head>
 <body>
   <div id="viewport"></div>
+  <div id="pinsLayer" class="pins-layer"></div>
 
-  <!-- Minimal Ust Baslik -->
   <header class="hud-top">
-    <div class="brand-chip">
-      <span class="neon-dot"></span>
-      <span>ANATOMİ 3D</span>
-    </div>
+    <div class="brand-chip">Anatomi 3D</div>
     <div id="statusChip" class="status-chip">Yükleniyor...</div>
     <button id="btnReset" class="hud-mini-btn">Sıfırla</button>
   </header>
 
-  <!-- Secili Yapi Kisa Bandi (Ustte tek satir, hemen kapatilabilir) -->
   <div id="selectedPill" class="selected-pill hidden">
     <div class="sel-text" id="btnOpenDetailFromPill">
       <strong id="pillName">-</strong>
       <small id="pillLatin">-</small>
     </div>
+    <button id="btnPillFade" class="pill-action">Fade</button>
     <button id="btnPillHide" class="pill-action">Gizle</button>
     <button id="btnPillIsolate" class="pill-action">İzole</button>
     <button id="btnPillClose" class="pill-close">✕</button>
   </div>
 
-  <!-- Hata / Bilgi Toast -->
   <div id="toast" class="toast hidden"></div>
 
-  <!-- Tek Alt Cekmece (Bottom Sheet - Her zaman tek acik, kesin kapanir) -->
   <section id="sheet" class="sheet hidden">
     <div class="sheet-header">
       <h3 id="sheetTitle">Menü</h3>
@@ -42,13 +37,12 @@
     <div id="sheetBody" class="sheet-body"></div>
   </section>
 
-  <!-- Alt Ana Navigasyon -->
   <nav class="bottom-nav">
     <button data-sheet="systems" class="nav-btn">Sistemler</button>
     <button data-sheet="search" class="nav-btn">Ara</button>
     <button data-sheet="camera" class="nav-btn">Kamera</button>
     <button data-sheet="slice" class="nav-btn">Kesit</button>
-    <button id="btnXray" class="nav-btn">Röntgen</button>
+    <button id="btnPins" class="nav-btn">Pinler</button>
   </nav>
 
   <script type="module" src="/src/main.js"></script>
