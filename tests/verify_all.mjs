@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { formatBenchmarkReport } from '../src/benchmark.js';
 import {
   ATLAS_PALETTE,
   STUDY_PRESETS,
@@ -151,5 +152,24 @@ for (let r = 1; r <= 3; r++) {
     assert.equal(computeClipPlaneConfig(true, ax, 0.75).constant, 0.75);
   });
 });
+
+
+
+// 9. Benchmark Report Formatter (3 rounds)
+for (let r = 1; r <= 3; r++) {
+  runTest(`Benchmark Rapor Formati (Tur ${r}/3)`, () => {
+    const txt = formatBenchmarkReport(
+      [
+        { name: 'Koroner Arterler', status: 'PASS', detail: '8 aktif damar' },
+        { name: 'BT/MR Modulleri', status: 'FAIL', detail: '0 modul' }
+      ],
+      { avgFps: 58, minFps: 42, drawCalls: 120, triangles: 450000, geometries: 85 }
+    );
+    assert.ok(txt.includes('1 PASS | 0 WARN | 1 FAIL'));
+    assert.ok(txt.includes('Ort 58 FPS'));
+    assert.ok(txt.includes('[PASS] Koroner Arterler'));
+    assert.ok(txt.includes('[FAIL] BT/MR Modulleri'));
+  });
+}
 
 console.log(`\nTUM TESTLER BASARILI: ${passed}/${passed} gecti.`);

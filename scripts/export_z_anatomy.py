@@ -66,11 +66,33 @@ HELPER_COL_KEYWORDS = (
 HELPER_NAME_KEYWORDS = (
     "plane", "slice", "section", "cutter", "boolean", "box", "cube", "grid",
     "mri", "gizmo", "panel", "frame", "background", "backdrop", "quad", "rect",
-    "arrow", "pointer", "marker", "profile", "bevel", "camera", "light", "lamp", "empty"
+    "arrow", "pointer", "marker", "camera", "light", "lamp", "empty"
+)
+
+CORONARY_KEYWORDS = (
+    "coronar", "interventricular", "circumflex", "cardiac vein", "cardiac_vein",
+    "vena cardiaca", "venae cardiacae", "sinus coronarius", "coronary sinus",
+    "diagonal branch", "marginal branch", "sinoatrial nodal", "atrioventricular nodal",
+    "conus arteriosus", "oblique vein of left atrium", "posterior vein of left ventricle",
+    "great cardiac", "middle cardiac", "small cardiac", "anterior cardiac"
+)
+
+PROTECTED_ANAT_KEYWORDS = CORONARY_KEYWORDS + (
+    "artery", "arteria", "vein", "vena", "nerve", "nervus", "heart", "cor_",
+    "atrium", "ventric", "valva", "valve", "aorta", "pulmonary", "bronch", "trachea"
 )
 
 SYSTEM_RULES = [
-    ("cor_detail",  ["heart", "cor ", "atrium", "ventric", "pericard", "myocard", "endocard", "valva", "tricuspid", "mitral", "bicuspid", "semilunar", "papillar", "chordae", "trabecul", "auricul", "coronar", "interventricular", "circumflex", "cardiac vein", "sinus coronarius", "fossa ovalis", "crista terminalis", "pectinate", "aortic root", "pulmonary trunk", "truncus pulmonalis"]),
+    ("cor_detail",  [
+        "heart", "cor ", "cor_", "atrium", "ventric", "pericard", "myocard", "endocard",
+        "valva", "valve", "tricuspid", "mitral", "bicuspid", "semilunar", "papillar",
+        "chordae", "trabecul", "auricul", "coronar", "interventricular", "circumflex",
+        "cardiac vein", "great cardiac", "middle cardiac", "small cardiac", "anterior cardiac",
+        "sinus coronarius", "fossa ovalis", "crista terminalis", "pectinate",
+        "aortic root", "ascending aorta", "pulmonary trunk", "truncus pulmonalis",
+        "diagonal branch", "marginal branch", "sinoatrial", "atrioventricular",
+        "conus arteriosus", "oblique vein of left atrium", "posterior vein of left ventricle"
+    ]),
     ("lymphatica",  ["lymph", "nodi ", "nodus ", "ductus thoracicus", "cisterna chyli", "spleen", "splen", "thymus", "tonsil"]),
     ("venae",       ["vein", "vena ", "venae", "venous", "venosus", "jugular", "saphen", "cava", "azygos", "portal", "sinus sagittalis", "sinus transversus"]),
     ("arteriae",    ["artery", "arteria", "arteriae", "aorta", "carotid", "subclavian", "femoral artery", "iliac artery", "brachial", "radial artery", "ulnar artery", "mesenteric", "celiac", "coeliac", "renal artery", "cardiovascular"]),
@@ -97,9 +119,24 @@ SYSTEM_META = {
     "nervous":     {"name": "Systema nervosum",      "tr": "Sinir Sistemi",                   "group": "zanatomy", "color": "#eab308", "defaultVisible": False, "defaultOpacity": 1.0}
 }
 
+def is_coronary_name(text):
+    t = (text or "").lower()
+    return any(kw in t for kw in CORONARY_KEYWORDS)
+
+def is_protected_anat(obj):
+    ln = obj.name.lower()
+    if any(k in ln for k in ("-profile", "_profile", "bevel_profile", "bevel-profile")):
+        return False
+    return any(kw in ln for kw in PROTECTED_ANAT_KEYWORDS)
+
 def classify_object(obj):
     col_names = " ".join(c.name.lower() for c in obj.users_collection)
-    combined = obj.name.lower() + " " + col_names
+    name_low = obj.name.lower()
+    # First check object's OWN name so coronary arteries inside a generic "Arteries" collection still go to cor_detail
+    for sys_id, keywords in SYSTEM_RULES:
+        if any(kw in name_low for kw in keywords):
+            return sys_id
+    combined = name_low + " " + col_names
     for sys_id, keywords in SYSTEM_RULES:
         if any(kw in combined for kw in keywords):
             return sys_id
@@ -108,9 +145,9 @@ def classify_object(obj):
 def classify_subtype(sys_id, name_str, region_str):
     t = (name_str + " " + region_str).lower()
     if sys_id == "cor_detail":
-        if any(k in t for k in ("vein", "vena", "sinus coronarius", "cardiac vein")):
+        if any(k in t for k in ("vein", "vena", "sinus coronarius", "cardiac vein", "great cardiac", "middle cardiac", "small cardiac")):
             return "vein"
-        if any(k in t for k in ("arter", "coronar", "interventricular", "circumflex", "marginal", "aort")):
+        if any(k in t for k in ("arter", "coronar", "interventricular", "circumflex", "marginal", "diagonal", "sinoatrial", "atrioventricular", "aort", "conus")):
             return "artery"
         return "heart"
     if sys_id == "lymphatica": return "lymph"
@@ -125,6 +162,9 @@ def classify_subtype(sys_id, name_str, region_str):
 def is_flat_plane_or_box(obj):
     if obj.type != "MESH":
         return False
+    # Never drop protected fine vessels / coronary branches!
+    if is_protected_anat(obj):
+        return len(obj.data.vertices) < 3 or len(obj.data.polygons) < 1
     if len(obj.data.vertices) < 12 or len(obj.data.polygons) < 6:
         return True
     dims = sorted([abs(d) for d in obj.dimensions])
@@ -136,16 +176,31 @@ def is_helper_object(obj, col_names_lower):
     if obj.display_type in ("WIRE", "BOUNDS"):
         return True
     lower_n = obj.name.lower()
+    if any(k in lower_n for k in ("-profile", "_profile", "bevel_profile", "bevel-profile")):
+        return True
     if any(kw in col_names_lower for kw in HELPER_COL_KEYWORDS):
         return True
-    if any(kw in lower_n for kw in HELPER_NAME_KEYWORDS):
+    if not is_protected_anat(obj) and any(kw in lower_n for kw in HELPER_NAME_KEYWORDS):
         return True
     if is_flat_plane_or_box(obj):
         return True
     if obj.type == "CURVE":
         d = obj.data
-        has_volume = (getattr(d, "bevel_depth", 0) > 0) or (getattr(d, "extrude", 0) > 0) or (getattr(d, "bevel_object", None) is not None)
+        has_volume = (
+            (getattr(d, "bevel_depth", 0) > 0)
+            or (getattr(d, "extrude", 0) > 0)
+            or (getattr(d, "bevel_object", None) is not None)
+            or (len(obj.modifiers) > 0)
+        )
         if not has_volume:
+            if is_protected_anat(obj):
+                # Give thin anatomical vessel/coronary curves a real 1.2mm 3D radius so they export visibly
+                try:
+                    d.bevel_depth = 0.0012
+                    d.bevel_resolution = 2
+                    return False
+                except Exception:
+                    return True
             return True
     return False
 
@@ -168,6 +223,7 @@ def canonical_key(sys_id, latin):
 
 by_system = {k: [] for k in SYSTEM_META.keys()}
 manifest_structures = []
+coronary_names = []
 raw_labels = []
 skipped_helpers = 0
 
@@ -212,6 +268,8 @@ for obj in bpy.context.view_layer.objects:
     obj["anat_region"] = region_str
 
     by_system[sys_id].append(obj)
+    if is_coronary_name(obj.name) or is_coronary_name(latin_name):
+        coronary_names.append(f"{latin_name} [{obj.type}]")
     manifest_structures.append({
         "meshName": obj.name,
         "latin": latin_name,
@@ -222,8 +280,8 @@ for obj in bpy.context.view_layer.objects:
         "region": region_str
     })
 
-# 2. Snap osteology & organ labels directly onto nearest real mesh surface (closest_point_on_mesh)
-surface_pins = {}  # entityKey -> [ { latin, pos: [x,y,z] } ]
+# 2. Snap osteology & organ labels directly onto nearest real mesh surface
+surface_pins = {}
 mesh_centers = {}
 for sys_id in ("skeletal", "cor_detail", "respiratory", "digestive"):
     centers = []
@@ -238,7 +296,6 @@ for lbl_obj, disp, base, sys_id in raw_labels:
     if sys_id not in mesh_centers or not mesh_centers[sys_id]:
         continue
     wloc = lbl_obj.matrix_world.translation
-    # Find top 3 nearest meshes by bounding-box center, then exact surface point
     cands = sorted(mesh_centers[sys_id], key=lambda item: (item[1] - wloc).length)[:3]
     best_dist = 1e9
     best_pt = None
@@ -270,6 +327,7 @@ for lbl_obj, disp, base, sys_id in raw_labels:
             snapped_count += 1
 
 exported_systems = []
+exported_coronaries = 0
 for sys_id, objs in by_system.items():
     if not objs:
         continue
@@ -299,6 +357,8 @@ for sys_id, objs in by_system.items():
         o.hide_viewport = False
         o.select_set(True)
         valid_count += 1
+        if sys_id == "cor_detail" and (is_coronary_name(o.name) or is_coronary_name(o.get("anat_latin", ""))):
+            exported_coronaries += 1
 
     if valid_count == 0:
         continue
@@ -329,6 +389,8 @@ with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as mf:
         "source": "Z-Anatomy / BodyParts3D + NIH HuBMAP HRA + Dundee CAHID + Brainproject",
         "license": "CC BY-SA 4.0 / CC BY 4.0",
         "totalStructures": len(manifest_structures),
+        "coronaryCount": exported_coronaries,
+        "coronarySamples": sorted(set(coronary_names))[:25],
         "snappedPins": snapped_count,
         "skippedHelpers": skipped_helpers,
         "systems": exported_systems,
@@ -338,4 +400,6 @@ with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as mf:
 with open(os.path.join(out_dir, "surface_pins.json"), "w", encoding="utf-8") as pf:
     json.dump(surface_pins, pf, ensure_ascii=False)
 
-print(f"[Z-Anatomy Export] Done. CleanMeshes={len(manifest_structures)}, SnappedPins={snapped_count}, SkippedHelpers={skipped_helpers}")
+print(f"[Z-Anatomy Export] Done. CleanMeshes={len(manifest_structures)}, ExportedCoronaries={exported_coronaries}, SnappedPins={snapped_count}, SkippedHelpers={skipped_helpers}")
+if coronary_names:
+    print("[Z-Anatomy Coronaries]", sorted(set(coronary_names))[:15])

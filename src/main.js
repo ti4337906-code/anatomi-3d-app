@@ -5,6 +5,7 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { findClinicalInfo } from './anatomy-tr.js';
 import { getMicroBumpTexture, getPBRProfile } from './pbr-textures.js';
+import { runLiveBenchmarkSuite } from './benchmark.js';
 import {
   STUDY_PRESETS,
   createAtlasState,
@@ -112,6 +113,7 @@ function openSheet(tab) {
   if (tab === 'systems') renderSystemsTab();
   else if (tab === 'tools') renderToolsTab();
   else if (tab === 'search') renderSearchTab();
+  else if (tab === 'benchmark') renderBenchmarkTab();
 }
 
 document.getElementById('btnMenu').addEventListener('click', () => activeTab ? closeSheet() : openSheet('systems'));
@@ -674,6 +676,84 @@ function renderSearchTab() {
   };
   input.oninput = draw;
   draw();
+}
+
+
+let lastBenchResults = null;
+let lastBenchFps = null;
+let lastBenchReport = '';
+let benchRunning = false;
+
+function renderBenchmarkTab() {
+  sheetBody.innerHTML = `
+    <div class="section-label">Canlı WebGL & Anatomi Test Modu</div>
+    <div class="grid-2">
+      <button id="btnRunBench" class="tile-btn active" ${benchRunning ? 'disabled' : ''}>${benchRunning ? 'Test Çalışıyor...' : '▶ Testi & FPS Başlat'}</button>
+      <button id="btnCopyBench" class="tile-btn" ${lastBenchReport ? '' : 'disabled'}>Raporu Kopyala</button>
+    </div>
+    <div id="benchSummary" class="bench-summary">${
+      lastBenchFps
+        ? `<strong>360° FPS:</strong> Ort ${lastBenchFps.avgFps} FPS (Min ${lastBenchFps.minFps})<br/><strong>GPU:</strong> ${lastBenchFps.drawCalls} draw call • ${lastBenchFps.triangles.toLocaleString('tr-TR')} üçgen • ${lastBenchFps.geometries} geometri`
+        : 'Başlat tuşuna bastığında tüm BT/MR modülleri, koroner arterler, pin hizalama, GPU dispose ve 360° FPS cihazda canlı ölçülür.'
+    }</div>
+    <div id="benchList"></div>
+  `;
+
+  const list = document.getElementById('benchList');
+  if (lastBenchResults) {
+    lastBenchResults.forEach(r => {
+      const row = document.createElement('div');
+      row.className = 'bench-row';
+      row.innerHTML = `<span class="bench-badge ${r.status}">${r.status}</span><div class="bench-text"><strong>${r.name}</strong><small>${r.detail}</small></div>`;
+      list.appendChild(row);
+    });
+  }
+
+  document.getElementById('btnRunBench').onclick = async () => {
+    if (benchRunning || !manifest) return;
+    benchRunning = true;
+    lastBenchResults = [];
+    lastBenchFps = null;
+    lastBenchReport = '';
+    renderBenchmarkTab();
+    try {
+      const out = await runLiveBenchmarkSuite({
+        manifest, state, systemMeta, systemLoaded,
+        loadSystem, disposeSystemGPU, refreshAllVisuals,
+        selectEntity, clearSelection, getEntityBox,
+        applyClip, camera, controls, renderer, viewport,
+        onProgress: (res, fps) => {
+          lastBenchResults = res;
+          if (fps) lastBenchFps = fps;
+          if (activeTab === 'benchmark') renderBenchmarkTab();
+        }
+      });
+      lastBenchResults = out.results;
+      lastBenchFps = out.fpsMetrics;
+      lastBenchReport = out.reportText;
+    } catch (err) {
+      lastBenchResults = [...(lastBenchResults || []), { name: 'Beklenmeyen Hata', status: 'FAIL', detail: String(err) }];
+    }
+    benchRunning = false;
+    if (activeTab === 'benchmark') renderBenchmarkTab();
+    toast('Benchmark tamamlandı');
+  };
+
+  document.getElementById('btnCopyBench').onclick = async () => {
+    if (!lastBenchReport) return;
+    try {
+      await navigator.clipboard.writeText(lastBenchReport);
+      toast('Test raporu panoya kopyalandı');
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = lastBenchReport;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      toast('Test raporu kopyalandı');
+    }
+  };
 }
 
 window.addEventListener('resize', () => {

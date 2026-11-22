@@ -20,52 +20,61 @@ jobs:
         uses: actions/cache@v4
         with:
           path: public/models
-          key: multi-ct-mri-v11-${{ hashFiles('scripts/export_z_anatomy.py', 'scripts/assemble_hybrid_ct.py', 'custom_models/**') }}
+          key: multi-ct-mri-v12-${{ hashFiles('scripts/export_z_anatomy.py', 'scripts/assemble_hybrid_ct.py', 'custom_models/**') }}
 
-      - name: Install Blender (Headless)
+      - name: Install Blender & Git LFS
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y blender python3-numpy unzip git curl
+          sudo apt-get install -y blender python3-numpy unzip git git-lfs curl
+          git lfs install
 
       - name: Export Z-Anatomy & fetch all CT/MRI open-source datasets
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
           mkdir -p assets_source public/models
 
-          # 1. Z-Anatomy (full dissectible body + surface-snapped osteology pins)
+          # 1. Z-Anatomy (full dissectible body + protected coronaries + surface-snapped pins)
           git clone --depth 1 https://github.com/Z-Anatomy/Models-of-human-anatomy.git assets_source/repo
           unzip -q assets_source/repo/Z-Anatomy.zip -d assets_source/extracted
           BLEND_FILE=$(find assets_source/extracted -name "*.blend" | head -n 1)
           cp assets_source/repo/TA2.csv assets_source/TA2.csv
           blender -b "$BLEND_FILE" --python-exit-code 1 -P scripts/export_z_anatomy.py -- --ta2 assets_source/TA2.csv --out public/models
 
-          # 2. NIH HuBMAP HRA (Visible Human Project — 1mm CT & 0.33mm Cryo-section GLB organs)
-          git clone --depth 1 https://github.com/hubmapconsortium/ccf-3d-reference-object-library.git assets_source/hubmap_hra || true
+          # 2. NIH HuBMAP HRA (Visible Human Project — 1mm CT & 0.33mm Cryo-section GLB organs, with Git LFS)
+          git clone --depth 1 https://github.com/hubmapconsortium/ccf-3d-reference-object-library.git assets_source/hubmap_hra
+          (cd assets_source/hubmap_hra && git lfs pull) || true
 
           # 3. Dundee CAHID Interior Heart (BT/MR)
-          git clone --depth 1 https://github.com/karansuraj/pvc-heart-tool.git assets_source/heart_hd || true
+          git clone --depth 1 https://github.com/karansuraj/pvc-heart-tool.git assets_source/heart_hd
+          (cd assets_source/heart_hd && git lfs pull) || true
 
           # 4. Brainproject Neuroanatomy (MR + MNI Atlas)
-          git clone --depth 1 https://github.com/itayinbarr/brainproject.git assets_source/brainproject || true
+          git clone --depth 1 https://github.com/itayinbarr/brainproject.git assets_source/brainproject
+          (cd assets_source/brainproject && git lfs pull) || true
 
           # 5. Dental Scope (Craniofacial Jaws, Sinuses & Trigeminal)
-          git clone --depth 1 https://github.com/Yoosseph/dental-scope.git assets_source/dental_scope || true
+          git clone --depth 1 https://github.com/Yoosseph/dental-scope.git assets_source/dental_scope
+          (cd assets_source/dental_scope && git lfs pull) || true
 
-          # Assemble all CT/MRI + custom_models/*.glb into manifest.json
+          # Assemble & strictly validate binary GLB headers + HRA SPARQL fallback
           python3 scripts/assemble_hybrid_ct.py
           ls -lh public/models
 
-      - name: Verify multi-source anatomical integrity
+      - name: Verify multi-source anatomical & coronary integrity
         run: |
           python3 - << 'PY'
           import json
           m = json.load(open("public/models/manifest.json", encoding="utf-8"))
-          sys_ids = {s["id"]: s["meshCount"] for s in m["systems"]}
+          sys_ids = {s["id"]: (s["meshCount"], s.get("sizeMB", 0)) for s in m["systems"]}
           assert m["totalStructures"] >= 2000, f"Yetersiz yapi: {m['totalStructures']}"
+          assert m.get("coronaryCount", 0) >= 4, f"Koroner arter bulunamadi! coronaryCount={m.get('coronaryCount')}"
+          assert m.get("ctModuleCount", 0) >= 2, f"BT/MR modulu eksik! ctModuleCount={m.get('ctModuleCount')}"
           for req in ("cor_detail", "arteriae", "venae", "respiratory", "digestive"):
-              assert req in sys_ids and sys_ids[req] > 0, f"Eksik sistem katmani: {req}"
-          print("VERIFIED ALL MODULES:", list(sys_ids.keys()), "Total Z-Anatomy:", m["totalStructures"], "SnappedPins:", m.get("snappedPins", 0))
+              assert req in sys_ids and sys_ids[req][0] > 0, f"Eksik sistem katmani: {req}"
+          print("VERIFIED ALL MODULES:", sys_ids)
+          print("Total Z-Anatomy:", m["totalStructures"], "Coronaries:", m["coronaryCount"], "CT Modules:", m["ctModuleCount"], "TotalMB:", m.get("totalModelsMB"))
+          print("Coronary Samples:", m.get("coronarySamples", [])[:10])
           PY
 
       - name: Upload models artifact for build jobs
@@ -135,6 +144,7 @@ jobs:
         with:
           name: web-dist
           path: dist
+          retention-days: 1
 
       - name: Initialize Capacitor Android & build offline APK
         run: |
@@ -163,6 +173,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-apk
-          name: Atlas Anatomicus 3D (Çoklu BT/MR Harmanlanmış APK)
+          name: Atlas Anatomicus 3D (v8 BT/MR + Koroner + Benchmark)
           files: release-apk/Anatomi3D-Atlas.apk
           make_latest: true
